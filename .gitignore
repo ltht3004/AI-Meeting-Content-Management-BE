@@ -130,3 +130,6 @@ venv.bak/
 
 # PyCharm settings
 .idea/
+
+# SQLite database
+sql_app.db
