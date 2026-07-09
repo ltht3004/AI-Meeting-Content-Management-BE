@@ -1,19 +1,37 @@
-# pyrefly: ignore [missing-import]
-from pydantic import BaseModel
+from uuid import UUID
 from datetime import datetime
 from typing import Optional
+
+from pydantic import BaseModel
+
 
 class MeetingBase(BaseModel):
     title: str
     description: Optional[str] = None
-    scheduled_time: Optional[datetime] = None
+    meeting_date: datetime
+    location: Optional[str] = None
+    duration: Optional[int] = None
+    participants: Optional[str] = None
+    status: Optional[str] = "Scheduled"
+
 
 class MeetingCreate(MeetingBase):
-    pass
+    user_id: UUID
+
+
+class MeetingUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    meeting_date: Optional[datetime] = None
+    location: Optional[str] = None
+    duration: Optional[int] = None
+    participants: Optional[str] = None
+    status: Optional[str] = None
+
 
 class MeetingResponse(MeetingBase):
-    id: int
-    creator_id: int
+    id: UUID
+    user_id: UUID
 
     class Config:
         from_attributes = True
