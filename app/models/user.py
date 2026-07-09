@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, DateTime
+from sqlalchemy import Column, String, DateTime, Boolean, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -18,6 +18,11 @@ class User(Base):
     password = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False, default="user")
     status = Column(String(50), nullable=False, default="Active")
+
+    is_active = Column(Boolean, default=True)
+    total_quota = Column(Integer, default=600)
+    used_quota = Column(Integer, default=0)
+    reset_date = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(
