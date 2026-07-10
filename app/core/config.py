@@ -6,6 +6,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./sql_app.db"
     JWT_SECRET: str = "development-secret-key-change-me"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
     
     class Config:
         env_file = ".env"
