@@ -29,3 +29,5 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 def root():
     return {"message": f"Welcome to {settings.PROJECT_NAME} API"}
 
+
+# trigger reload
