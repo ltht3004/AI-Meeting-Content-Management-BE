@@ -18,6 +18,7 @@ class User(Base):
     password = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False, default="user")
     status = Column(String(50), nullable=False, default="Active")
+    avatar_url = Column(String(255), nullable=True)
 
     is_active = Column(Boolean, default=True)
     total_quota = Column(Integer, default=600)
