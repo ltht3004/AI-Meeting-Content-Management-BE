@@ -1,5 +1,7 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.router import api_router
 from app.core.config import settings
@@ -7,6 +9,8 @@ from app.core.config import settings
 from app.core.database import Base, engine
 from app.models import User, Meeting, Recording, Transcript, Summary
 
+# Ensure upload directories exist
+os.makedirs("uploads/avatars", exist_ok=True)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -22,6 +26,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
