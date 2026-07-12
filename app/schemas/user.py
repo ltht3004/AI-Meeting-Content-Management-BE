@@ -1,4 +1,4 @@
-﻿from uuid import UUID
+from uuid import UUID
 from typing import Optional
 import re
 
@@ -7,7 +7,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 
 class UserBase(BaseModel):
     email: EmailStr
-    full_name: Optional[str] = None
+    full_name: str = Field(..., min_length=4, description="Tên người dùng phải trên 3 kí tự")
     phone: Optional[str] = Field(None, pattern=r'^\d{10}$')
     role: Optional[str] = "user"
     status: Optional[str] = "Active"
@@ -31,7 +31,7 @@ class UserCreate(UserBase):
 
 
 class UserUpdate(BaseModel):
-    full_name: Optional[str] = None
+    full_name: Optional[str] = Field(None, min_length=4, description="Tên người dùng phải trên 3 kí tự")
     email: Optional[EmailStr] = None
     phone: Optional[str] = Field(None, pattern=r'^\d{10}$')
     role: Optional[str] = None
