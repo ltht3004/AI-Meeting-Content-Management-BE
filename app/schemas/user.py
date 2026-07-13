@@ -1,6 +1,7 @@
 from uuid import UUID
-from typing import Optional
+from typing import Optional, List
 import re
+from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -40,6 +41,17 @@ class UserUpdate(BaseModel):
 
 class UserResponse(UserBase):
     id: UUID
+    avatar_url: Optional[str] = None
+    total_quota: int
+    used_quota: int
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True
+
+class PaginatedUserResponse(BaseModel):
+    items: List[UserResponse]
+    total_count: int
+    page: int
+    limit: int
