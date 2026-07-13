@@ -9,7 +9,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 class UserBase(BaseModel):
     email: EmailStr
     full_name: str = Field(..., min_length=4, description="Tên người dùng phải trên 3 kí tự")
-    phone: Optional[str] = Field(None, pattern=r'^\d{10}$')
+    phone: Optional[str] = Field(None, pattern=r'^(03|05|07|08|09)\d{8}$')
     role: Optional[str] = "user"
     status: Optional[str] = "Active"
 
@@ -34,7 +34,7 @@ class UserCreate(UserBase):
 class UserUpdate(BaseModel):
     full_name: Optional[str] = Field(None, min_length=4, description="Tên người dùng phải trên 3 kí tự")
     email: Optional[EmailStr] = None
-    phone: Optional[str] = Field(None, pattern=r'^\d{10}$')
+    phone: Optional[str] = Field(None, pattern=r'^(03|05|07|08|09)\d{8}$')
     role: Optional[str] = None
     status: Optional[str] = None
 
