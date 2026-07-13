@@ -6,7 +6,7 @@ from datetime import datetime
 class ProfileUpdate(BaseModel):
     full_name: Optional[str] = Field(None, min_length=4, description="Tên người dùng phải trên 3 kí tự")
     email: Optional[EmailStr] = None
-    phone: Optional[str] = Field(None, pattern=r"^\d{10}$", description="Phone number must be exactly 10 digits")
+    phone: Optional[str] = Field(None, pattern=r"^(03|05|07|08|09)\d{8}$", description="Phone number must be exactly 10 digits and start with a valid Vietnamese prefix")
 
 class ChangePassword(BaseModel):
     current_password: str
@@ -23,6 +23,7 @@ class ProfileResponse(BaseModel):
     total_quota: int
     used_quota: int
     created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True
