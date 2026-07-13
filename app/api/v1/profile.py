@@ -86,6 +86,12 @@ def update_profile(
             )
         current_user.email = profile_data.email
     if hasattr(profile_data, 'phone') and profile_data.phone is not None:
+        existing_phone = db.query(User).filter(User.phone == profile_data.phone, User.id != current_user.id).first()
+        if existing_phone:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Phone number is already in use"
+            )
         current_user.phone = profile_data.phone
         
     db.commit()
