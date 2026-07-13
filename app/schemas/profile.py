@@ -4,7 +4,7 @@ from uuid import UUID
 from datetime import datetime
 
 class ProfileUpdate(BaseModel):
-    full_name: Optional[str] = None
+    full_name: Optional[str] = Field(None, min_length=4, description="Tên người dùng phải trên 3 kí tự")
     email: Optional[EmailStr] = None
     phone: Optional[str] = Field(None, pattern=r"^\d{10}$", description="Phone number must be exactly 10 digits")
 

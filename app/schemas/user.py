@@ -1,13 +1,14 @@
-﻿from uuid import UUID
-from typing import Optional
+from uuid import UUID
+from typing import Optional, List
 import re
+from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class UserBase(BaseModel):
     email: EmailStr
-    full_name: Optional[str] = None
+    full_name: str = Field(..., min_length=4, description="Tên người dùng phải trên 3 kí tự")
     phone: Optional[str] = Field(None, pattern=r'^\d{10}$')
     role: Optional[str] = "user"
     status: Optional[str] = "Active"
@@ -31,7 +32,7 @@ class UserCreate(UserBase):
 
 
 class UserUpdate(BaseModel):
-    full_name: Optional[str] = None
+    full_name: Optional[str] = Field(None, min_length=4, description="Tên người dùng phải trên 3 kí tự")
     email: Optional[EmailStr] = None
     phone: Optional[str] = Field(None, pattern=r'^\d{10}$')
     role: Optional[str] = None
@@ -40,6 +41,17 @@ class UserUpdate(BaseModel):
 
 class UserResponse(UserBase):
     id: UUID
+    avatar_url: Optional[str] = None
+    total_quota: int
+    used_quota: int
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True
+
+class PaginatedUserResponse(BaseModel):
+    items: List[UserResponse]
+    total_count: int
+    page: int
+    limit: int

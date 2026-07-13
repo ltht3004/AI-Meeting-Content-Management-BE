@@ -119,13 +119,17 @@ def upload_avatar(
     
     ext = file.filename.split('.')[-1]
     filename = f"{uuid.uuid4()}.{ext}"
+    os.makedirs(os.path.join("uploads", "avatars"), exist_ok=True)
     filepath = os.path.join("uploads", "avatars", filename)
     
     if current_user.avatar_url:
         old_filename = current_user.avatar_url.split('/')[-1]
         old_filepath = os.path.join("uploads", "avatars", old_filename)
         if os.path.exists(old_filepath):
-            os.remove(old_filepath)
+            try:
+                os.remove(old_filepath)
+            except:
+                pass
             
     with open(filepath, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
@@ -145,7 +149,10 @@ def remove_avatar(
         old_filename = current_user.avatar_url.split('/')[-1]
         old_filepath = os.path.join("uploads", "avatars", old_filename)
         if os.path.exists(old_filepath):
-            os.remove(old_filepath)
+            try:
+                os.remove(old_filepath)
+            except:
+                pass
             
         current_user.avatar_url = None
         db.commit()
