@@ -1,4 +1,4 @@
-﻿import random
+import random
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
@@ -84,7 +84,7 @@ def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
         return {"message": "If the email exists, a reset code has been sent."}
     
     code = f"{random.randint(100000, 999999)}"
-    user.reset_code = code
+    user.reset_code = get_password_hash(code)
     user.reset_code_expires_at = datetime.utcnow() + timedelta(minutes=15)
     db.commit()
     
@@ -94,7 +94,10 @@ def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
 @router.post("/reset-password")
 def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == req.email).first()
-    if not user or not user.reset_code or user.reset_code != req.reset_code:
+    if not user or not user.reset_code:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset code")
+        
+    if not verify_password(req.reset_code, user.reset_code):
         raise HTTPException(status_code=400, detail="Invalid or expired reset code")
     
     if user.reset_code_expires_at and user.reset_code_expires_at < datetime.utcnow():
