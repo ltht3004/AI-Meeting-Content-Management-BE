@@ -1,7 +1,9 @@
 from typing import Optional
 from uuid import UUID as PyUUID
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -12,6 +14,27 @@ from app.models.transcript import Transcript
 from app.models.user import User
 
 router = APIRouter()
+
+
+def get_month_bounds():
+    now = datetime.now()
+    current_month_start = datetime(now.year, now.month, 1)
+
+    if now.month == 1:
+        previous_month_start = datetime(now.year - 1, 12, 1)
+    else:
+        previous_month_start = datetime(now.year, now.month - 1, 1)
+
+    return previous_month_start, current_month_start
+
+
+def calculate_growth_percent(current_count: int, previous_count: int):
+    if previous_count == 0:
+        if current_count == 0:
+            return 0
+        return 100
+
+    return round(((current_count - previous_count) / previous_count) * 100)
 
 
 def get_visible_meetings_query(db: Session, current_user_id: Optional[str]):
@@ -68,6 +91,33 @@ def get_dashboard_summary(
     total_transcripts = db.query(Transcript).join(Recording).filter(
         Recording.meeting_id.in_(meeting_ids_subquery)
     ).count()
+
+    previous_month_start, current_month_start = get_month_bounds()
+    current_month_meetings = visible_meetings_query.filter(
+        Meeting.created_at >= current_month_start
+    ).count()
+    previous_month_meetings = visible_meetings_query.filter(
+        Meeting.created_at >= previous_month_start,
+        Meeting.created_at < current_month_start
+    ).count()
+    meeting_growth_percent = calculate_growth_percent(
+        current_month_meetings,
+        previous_month_meetings
+    )
+
+    total_storage_bytes = db.query(
+        func.coalesce(func.sum(Recording.size), 0)
+    ).filter(
+        Recording.meeting_id.in_(meeting_ids_subquery)
+    ).scalar() or 0
+
+    summarized_duration_minutes = db.query(
+        func.coalesce(func.sum(Meeting.duration), 0)
+    ).join(
+        Summary, Summary.meeting_id == Meeting.id
+    ).filter(
+        Meeting.id.in_(meeting_ids_subquery)
+    ).scalar() or 0
 
     recent_meetings = visible_meetings_query.order_by(
         Meeting.created_at.desc()
@@ -140,7 +190,11 @@ def get_dashboard_summary(
             "total_meetings": total_meetings,
             "total_recordings": total_recordings,
             "total_transcripts": total_transcripts,
-            "total_summaries": total_summaries
+            "total_summaries": total_summaries,
+            "meeting_growth_percent": meeting_growth_percent,
+            "total_storage_bytes": int(total_storage_bytes),
+            "transcript_accuracy_avg": None,
+            "summarized_duration_minutes": int(summarized_duration_minutes)
         },
         "recent_meetings": [
             {
