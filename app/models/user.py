@@ -20,7 +20,6 @@ class User(Base):
     status = Column(String(50), nullable=False, default="Active")
     avatar_url = Column(String(255), nullable=True)
 
-    is_active = Column(Boolean, default=True)
     total_quota = Column(Integer, default=600)
     used_quota = Column(Integer, default=0)
     reset_date = Column(DateTime, nullable=True)
