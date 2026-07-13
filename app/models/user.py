@@ -23,7 +23,7 @@ class User(Base):
     total_quota = Column(Integer, default=600)
     used_quota = Column(Integer, default=0)
     reset_date = Column(DateTime, nullable=True)
-    reset_code = Column(String(10), nullable=True)
+    reset_code = Column(String(255), nullable=True)
     reset_code_expires_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now())
