@@ -83,6 +83,14 @@ def create_user(
             status_code=400,
             detail="The user with this email already exists in the system."
         )
+
+    if user_in.phone:
+        user_phone = db.query(User).filter(User.phone == user_in.phone).first()
+        if user_phone:
+            raise HTTPException(
+                status_code=400,
+                detail="The user with this phone number already exists in the system."
+            )
         
     user_data = user_in.model_dump(exclude={"password"})
     hashed_password = get_password_hash(user_in.password)
@@ -114,6 +122,14 @@ def update_user(
             raise HTTPException(
                 status_code=400,
                 detail="Email is already in use by another user."
+            )
+
+    if user_in.phone and user_in.phone != user.phone:
+        existing_phone = db.query(User).filter(User.phone == user_in.phone).first()
+        if existing_phone:
+            raise HTTPException(
+                status_code=400,
+                detail="Phone number is already in use by another user."
             )
             
     update_data = user_in.model_dump(exclude_unset=True)

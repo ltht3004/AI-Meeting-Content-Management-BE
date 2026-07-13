@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse
 from app.core.security import get_password_hash, verify_password, create_access_token
-from app.core.email import send_reset_code_email
+from app.core.email import send_reset_code_email, send_verification_email
 
 router = APIRouter()
 
@@ -29,31 +29,72 @@ class ResetPasswordRequest(BaseModel):
     reset_code: str
     new_password: str
 
-@router.post("/register", response_model=TokenResponse)
+class VerifyEmailRequest(BaseModel):
+    email: EmailStr
+    code: str
+
+class RegisterResponse(BaseModel):
+    message: str
+    email: str
+
+@router.post("/register", response_model=RegisterResponse)
 def register(user: UserCreate, db: Session = Depends(get_db)):
     existed_user = db.query(User).filter(User.email == user.email).first()
 
     if existed_user:
         raise HTTPException(status_code=400, detail="Email already exists")
 
+    existed_phone = db.query(User).filter(User.phone == user.phone).first()
+    if existed_phone:
+        raise HTTPException(status_code=400, detail="Phone number already exists")
+
+    code = f"{random.randint(100000, 999999)}"
+    
     new_user = User(
         full_name=user.full_name,
         email=user.email,
         phone=user.phone,
         password=get_password_hash(user.password),
         role=user.role or "user",
-        status=user.status or "Active"
+        status="Pending",
+        reset_code=get_password_hash(code),
+        reset_code_expires_at=datetime.utcnow() + timedelta(minutes=15)
     )
 
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    access_token = create_access_token(subject=new_user.id)
+    send_verification_email(new_user.email, code)
+    
+    return {
+        "message": "Verification email sent. Please check your inbox.",
+        "email": new_user.email
+    }
+
+@router.post("/verify-email", response_model=TokenResponse)
+def verify_email(req: VerifyEmailRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == req.email).first()
+    
+    if not user or not user.reset_code:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code")
+        
+    if not verify_password(req.code, user.reset_code):
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code")
+    
+    if user.reset_code_expires_at and user.reset_code_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Verification code has expired")
+        
+    user.status = "Active"
+    user.reset_code = None
+    user.reset_code_expires_at = None
+    db.commit()
+    
+    access_token = create_access_token(subject=user.id)
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "user": new_user
+        "user": user
     }
 
 @router.post("/login", response_model=TokenResponse)
