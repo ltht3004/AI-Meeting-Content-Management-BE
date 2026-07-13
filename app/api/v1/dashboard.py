@@ -16,6 +16,10 @@ from app.models.user import User
 router = APIRouter()
 
 
+def is_user_inactive(user: User) -> bool:
+    return str(user.status).lower() == "unactive"
+
+
 def get_month_bounds():
     now = datetime.now()
     current_month_start = datetime(now.year, now.month, 1)
@@ -52,7 +56,7 @@ def get_visible_meetings_query(db: Session, current_user_id: Optional[str]):
     if not current_user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if current_user.status == "Unactive" or not current_user.is_active:
+    if is_user_inactive(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account has been disabled"

@@ -12,6 +12,10 @@ from app.schemas.meeting import MeetingCreate, MeetingUpdate
 router = APIRouter()
 
 
+def is_user_inactive(user: User) -> bool:
+    return str(user.status).lower() == "unactive"
+
+
 def resolve_participants_names(db: Session, participants_str: Optional[str]) -> tuple[str, list[dict]]:
     if not participants_str:
         return "", []
@@ -44,7 +48,7 @@ def resolve_participants_names(db: Session, participants_str: Optional[str]) -> 
                 "id": str(user.id),
                 "name": user.full_name,
                 "status": user.status,
-                "is_active": user.is_active
+                "is_active": not is_user_inactive(user)
             })
         else:
             resolved_names.append(rid)
@@ -102,7 +106,7 @@ def resolve_names_to_ids(db: Session, participants_str: Optional[str]) -> Option
 
 
 def format_meeting_response(db: Session, meeting: Meeting) -> dict:
-    names_str, _ = resolve_participants_names(db, meeting.participants)
+    names_str, details = resolve_participants_names(db, meeting.participants)
     return {
         "id": str(meeting.id),
         "user_id": str(meeting.user_id),
@@ -112,6 +116,7 @@ def format_meeting_response(db: Session, meeting: Meeting) -> dict:
         "location": meeting.location,
         "duration": meeting.duration,
         "participants": names_str,
+        "participant_details": details,
         "status": meeting.status,
         "created_at": meeting.created_at.isoformat() if meeting.created_at else None,
         "updated_at": meeting.updated_at.isoformat() if meeting.updated_at else None,
@@ -146,7 +151,7 @@ def get_meetings(
             current_user = None
 
         if current_user:
-            if current_user.status == "Unactive" or not current_user.is_active:
+            if is_user_inactive(current_user):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Account has been disabled"
@@ -207,7 +212,7 @@ def get_meeting(
         if not current_user:
             raise HTTPException(status_code=404, detail="Mock User not found")
 
-        if current_user.status == "Unactive" or not current_user.is_active:
+        if is_user_inactive(current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Account has been disabled"
@@ -249,7 +254,7 @@ def create_meeting(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if user.status == "Unactive" or not user.is_active:
+    if is_user_inactive(user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account has been disabled"
@@ -297,7 +302,7 @@ def update_meeting(
         if not current_user:
             raise HTTPException(status_code=404, detail="Mock User not found")
 
-        if current_user.status == "Unactive" or not current_user.is_active:
+        if is_user_inactive(current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Account has been disabled"
@@ -344,7 +349,7 @@ def delete_meeting(
         if not current_user:
             raise HTTPException(status_code=404, detail="Mock User not found")
 
-        if current_user.status == "Unactive" or not current_user.is_active:
+        if is_user_inactive(current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Account has been disabled"

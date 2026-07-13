@@ -64,7 +64,7 @@ def get_users(
 def get_user(
     user_id: str,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(get_current_admin)
+    current_user: User = Depends(get_current_user)
 ):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -152,7 +152,7 @@ def delete_user(
 def get_user_stats(
     user_id: str,
     db: Session = Depends(get_db),
-    current_admin: User = Depends(get_current_admin)
+    current_user: User = Depends(get_current_user)
 ):
     from app.models.meeting import Meeting
     from app.models.recording import Recording
