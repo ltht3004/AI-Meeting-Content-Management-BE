@@ -1,13 +1,17 @@
+from datetime import datetime
+from uuid import UUID
+
 from pydantic import BaseModel
-from typing import Optional
 
 class RecordingResponse(BaseModel):
-    id: int
-    meeting_id: int
-    file_path: str
-    status: str
-    transcript: Optional[str] = None
-    summary: Optional[str] = None
+    id: UUID
+    meeting_id: UUID
+    file_name: str
+    file_url: str
+    file_type: str
+    size: int
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     class Config:
         from_attributes = True
