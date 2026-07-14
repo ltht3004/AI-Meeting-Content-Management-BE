@@ -1,3 +1,4 @@
+from datetime import timezone
 from typing import Optional
 from uuid import UUID
 
@@ -6,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.meeting import Meeting
+from app.models.recording import Recording
 from app.models.user import User
 from app.schemas.meeting import MeetingCreate, MeetingUpdate
 
@@ -14,6 +16,16 @@ router = APIRouter()
 
 def is_user_inactive(user: User) -> bool:
     return str(user.status).lower() == "unactive"
+
+
+def utc_isoformat(value):
+    if not value:
+        return None
+
+    if value.tzinfo:
+        return value.astimezone(timezone.utc).isoformat()
+
+    return value.replace(tzinfo=timezone.utc).isoformat()
 
 
 def resolve_participants_names(db: Session, participants_str: Optional[str]) -> tuple[str, list[dict]]:
@@ -118,16 +130,34 @@ def format_meeting_response(db: Session, meeting: Meeting) -> dict:
         "participants": names_str,
         "participant_details": details,
         "status": meeting.status,
-        "created_at": meeting.created_at.isoformat() if meeting.created_at else None,
-        "updated_at": meeting.updated_at.isoformat() if meeting.updated_at else None,
+        "created_at": utc_isoformat(meeting.created_at),
+        "updated_at": utc_isoformat(meeting.updated_at),
     }
 
 
 def format_meeting_detail_response(db: Session, meeting: Meeting) -> dict:
     names_str, details = resolve_participants_names(db, meeting.participants)
     response = format_meeting_response(db, meeting)
+    recordings = db.query(Recording).filter(
+        Recording.meeting_id == meeting.id
+    ).order_by(
+        Recording.created_at.desc()
+    ).all()
     response["participants"] = names_str
     response["participant_details"] = details
+    response["recordings"] = [
+        {
+            "id": str(recording.id),
+            "meeting_id": str(recording.meeting_id),
+            "file_name": recording.file_name,
+            "file_url": recording.file_url,
+            "file_type": recording.file_type,
+            "size": recording.size,
+            "created_at": utc_isoformat(recording.created_at),
+            "updated_at": utc_isoformat(recording.updated_at),
+        }
+        for recording in recordings
+    ]
     return response
 
 
