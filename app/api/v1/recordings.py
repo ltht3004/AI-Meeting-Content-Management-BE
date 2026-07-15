@@ -9,11 +9,13 @@ from app.core.database import get_db
 from app.models.meeting import Meeting
 from app.models.recording import Recording
 from app.schemas.recording import RecordingResponse
-from app.services.storage import build_recording_storage_path, upload_file_to_storage
+from app.services.storage import build_recording_storage_path, delete_file_from_storage, upload_file_to_storage
 
 router = APIRouter()
 
 ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".opus", ".aac", ".flac"}
+MAX_RECORDING_SIZE_BYTES = 50 * 1024 * 1024
+MAX_RECORDING_SIZE_LABEL = "50MB"
 
 
 def as_utc(value):
@@ -75,6 +77,12 @@ async def upload_recording(
             detail="Only audio files are allowed (.mp3, .wav, .m4a, .ogg, .opus, .aac, .flac)"
         )
 
+    if file.size and file.size > MAX_RECORDING_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size must not exceed {MAX_RECORDING_SIZE_LABEL}."
+        )
+
     stored_name = f"{uuid4()}{extension}"
 
     contents = await file.read()
@@ -82,6 +90,12 @@ async def upload_recording(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded file is empty"
+        )
+
+    if len(contents) > MAX_RECORDING_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size must not exceed {MAX_RECORDING_SIZE_LABEL}."
         )
 
     content_type = file.content_type or "audio/mpeg"
@@ -105,3 +119,20 @@ async def upload_recording(
     db.refresh(recording)
 
     return build_recording_response(recording)
+
+
+@router.delete("/{recording_id}")
+def delete_recording(
+    recording_id: UUID,
+    db: Session = Depends(get_db)
+):
+    recording = db.query(Recording).filter(Recording.id == recording_id).first()
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    delete_file_from_storage(recording.file_url)
+
+    db.delete(recording)
+    db.commit()
+
+    return {"message": "Recording deleted successfully"}
