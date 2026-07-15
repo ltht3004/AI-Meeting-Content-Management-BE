@@ -14,9 +14,18 @@ from app.models.transcript import Transcript
 from app.models.summary import Summary
 from app.schemas.profile import ProfileResponse, ProfileUpdate, ChangePassword, ProfileStatsResponse
 from app.core.security import verify_password, get_password_hash
+from pydantic import BaseModel
+import random
+from datetime import datetime, timedelta
+from app.core.email import send_verification_email
 
 router = APIRouter()
 security = HTTPBearer()
+
+pending_email_updates = {}
+
+class VerifyEmailChange(BaseModel):
+    code: str
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)) -> User:
     token = credentials.credentials
@@ -75,16 +84,28 @@ def update_profile(
     current_user: User = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
+    requires_email_verification = False
+    
     if profile_data.full_name is not None:
         current_user.full_name = profile_data.full_name
-    if profile_data.email is not None:
+        
+    if profile_data.email is not None and profile_data.email != current_user.email:
         existing_user = db.query(User).filter(User.email == profile_data.email, User.id != current_user.id).first()
         if existing_user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email is already in use"
             )
-        current_user.email = profile_data.email
+            
+        code = f"{random.randint(100000, 999999)}"
+        pending_email_updates[current_user.id] = {
+            "new_email": profile_data.email,
+            "code": get_password_hash(code),
+            "expires_at": datetime.utcnow() + timedelta(minutes=15)
+        }
+        send_verification_email(profile_data.email, code)
+        requires_email_verification = True
+        
     if hasattr(profile_data, 'phone') and profile_data.phone is not None:
         existing_phone = db.query(User).filter(User.phone == profile_data.phone, User.id != current_user.id).first()
         if existing_phone:
@@ -96,6 +117,45 @@ def update_profile(
         
     db.commit()
     db.refresh(current_user)
+    
+    response_dict = {
+        "id": current_user.id,
+        "email": current_user.email,
+        "full_name": current_user.full_name,
+        "phone": current_user.phone,
+        "role": current_user.role,
+        "status": current_user.status,
+        "avatar_url": current_user.avatar_url,
+        "total_quota": current_user.total_quota,
+        "used_quota": current_user.used_quota,
+        "created_at": current_user.created_at,
+        "updated_at": current_user.updated_at,
+        "requires_email_verification": requires_email_verification
+    }
+    return response_dict
+
+@router.post("/me/verify-email", response_model=ProfileResponse)
+def verify_email_update(
+    req: VerifyEmailChange,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    pending_update = pending_email_updates.get(current_user.id)
+    if not pending_update:
+        raise HTTPException(status_code=400, detail="No pending email update found or session expired")
+        
+    if not verify_password(req.code, pending_update["code"]):
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+        
+    if pending_update["expires_at"] < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Verification code has expired")
+        
+    current_user.email = pending_update["new_email"]
+    db.commit()
+    db.refresh(current_user)
+    
+    del pending_email_updates[current_user.id]
+    
     return current_user
 
 @router.put("/me/password")
