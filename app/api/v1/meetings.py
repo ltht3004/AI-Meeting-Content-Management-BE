@@ -1,8 +1,11 @@
 from datetime import timezone
+from io import BytesIO
 from typing import Optional
+import unicodedata
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -10,6 +13,7 @@ from app.models.meeting import Meeting
 from app.models.recording import Recording
 from app.models.user import User
 from app.schemas.meeting import MeetingCreate, MeetingUpdate
+from app.services.export_service import generate_docx_report, generate_pdf_report
 
 router = APIRouter()
 
@@ -26,6 +30,101 @@ def utc_isoformat(value):
         return value.astimezone(timezone.utc).isoformat()
 
     return value.replace(tzinfo=timezone.utc).isoformat()
+
+
+def validate_meeting_access(db: Session, meeting: Meeting, current_user_id: Optional[str]) -> None:
+    if not current_user_id:
+        return
+
+    try:
+        from uuid import UUID as pyUUID
+        user_uuid = pyUUID(str(current_user_id))
+        current_user = db.query(User).filter(User.id == user_uuid).first()
+    except ValueError:
+        current_user = None
+
+    if not current_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if is_user_inactive(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account has been disabled"
+        )
+
+    if current_user.role == "admin":
+        return
+
+    user_name = current_user.full_name
+    user_email = current_user.email
+    user_id_str = str(current_user.id)
+    is_creator = meeting.user_id == current_user.id
+    is_participant = False
+
+    if meeting.participants:
+        is_participant = (
+            user_name.lower() in meeting.participants.lower() or
+            user_email.lower() in meeting.participants.lower() or
+            user_id_str in meeting.participants
+        )
+
+    if not is_creator and not is_participant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied: You are not a participant in this meeting"
+        )
+
+
+def format_bytes(size: int) -> str:
+    if not size:
+        return "0 B"
+
+    units = ["B", "KB", "MB", "GB"]
+    value = float(size)
+    unit_index = 0
+
+    while value >= 1024 and unit_index < len(units) - 1:
+        value /= 1024
+        unit_index += 1
+
+    if unit_index == 0:
+        return f"{int(value)} {units[unit_index]}"
+
+    return f"{value:.1f} {units[unit_index]}"
+
+
+def build_export_data(db: Session, meeting: Meeting) -> dict:
+    names_str, details = resolve_participants_names(db, meeting.participants)
+    recordings = db.query(Recording).filter(
+        Recording.meeting_id == meeting.id
+    ).order_by(
+        Recording.created_at.desc()
+    ).all()
+
+    return {
+        "title": meeting.title,
+        "description": meeting.description,
+        "meeting_date": meeting.meeting_date.strftime("%d/%m/%Y %H:%M") if meeting.meeting_date else None,
+        "location": meeting.location,
+        "duration": meeting.duration,
+        "status": meeting.status,
+        "participants": [item["name"] for item in details] if details else [name.strip() for name in names_str.split(",") if name.strip()],
+        "summary": meeting.summary.content if meeting.summary else None,
+        "recordings": [
+            {
+                "file_name": recording.file_name,
+                "size_label": format_bytes(recording.size)
+            }
+            for recording in recordings
+        ],
+        "transcripts": [
+            {
+                "recording_name": recording.file_name,
+                "content": recording.transcript.content if recording.transcript else None
+            }
+            for recording in recordings
+        ]
+    }
 
 
 def resolve_participants_names(db: Session, participants_str: Optional[str]) -> tuple[str, list[dict]]:
@@ -63,12 +162,12 @@ def resolve_participants_names(db: Session, participants_str: Optional[str]) -> 
                 "is_active": not is_user_inactive(user)
             })
         else:
-            resolved_names.append(rid)
+            resolved_names.append("Unknown user")
             participant_details.append({
-                "id": rid,
-                "name": rid,
-                "status": "Active",
-                "is_active": True
+                "id": None,
+                "name": "Unknown user",
+                "status": "Unavailable",
+                "is_active": False
             })
             
     return ", ".join(resolved_names), participant_details
@@ -218,6 +317,57 @@ def get_meetings(
         "meetings": resolved_meetings,
         "total": total_count
     }
+
+
+@router.get("/{meeting_id}/export")
+def export_meeting_report(
+    meeting_id: UUID,
+    format: str = Query("pdf", pattern="^(pdf|docx)$"),
+    current_user_id: Optional[str] = Query(None, description="Current logged in user ID to validate export permission"),
+    db: Session = Depends(get_db)
+):
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    validate_meeting_access(db, meeting, current_user_id)
+
+    export_data = build_export_data(db, meeting)
+
+    try:
+        if format == "docx":
+            file_buffer = generate_docx_report(export_data)
+            media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            extension = "docx"
+        else:
+            file_buffer = generate_pdf_report(export_data)
+            media_type = "application/pdf"
+            extension = "pdf"
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    normalized_title = unicodedata.normalize("NFD", meeting.title)
+    ascii_title = "".join(
+        ch for ch in normalized_title
+        if unicodedata.category(ch) != "Mn"
+    )
+    safe_title = "".join(
+        ch.lower() if ch.isascii() and ch.isalnum() else "-"
+        for ch in ascii_title
+    ).strip("-")
+    while "--" in safe_title:
+        safe_title = safe_title.replace("--", "-")
+
+    filename = f"{safe_title or 'meeting'}-report.{extension}"
+
+    return StreamingResponse(
+        file_buffer if isinstance(file_buffer, BytesIO) else BytesIO(file_buffer),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
 
 
 @router.get("/{meeting_id}")

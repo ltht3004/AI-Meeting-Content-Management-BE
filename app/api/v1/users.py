@@ -64,6 +64,45 @@ def get_users(
         "limit": limit
     }
 
+@router.get("/participants")
+def get_participants(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    search: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    query = db.query(User)
+
+    if search:
+        search_term = f"%{search}%"
+        query = query.filter(
+            or_(
+                User.full_name.ilike(search_term),
+                User.email.ilike(search_term)
+            )
+        )
+
+    total_count = query.count()
+    users = query.order_by(User.full_name.asc()).offset(skip).limit(limit).all()
+    page = (skip // limit) + 1 if limit > 0 else 1
+
+    return {
+        "items": [
+            {
+                "id": str(user.id),
+                "full_name": user.full_name,
+                "email": user.email,
+                "status": user.status,
+                "avatar_url": user.avatar_url
+            }
+            for user in users
+        ],
+        "total_count": total_count,
+        "page": page,
+        "limit": limit
+    }
+
 @router.get("/{user_id}", response_model=UserResponse)
 def get_user(
     user_id: str,
