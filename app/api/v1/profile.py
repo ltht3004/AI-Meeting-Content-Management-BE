@@ -1,6 +1,8 @@
 import os
 import uuid
 import shutil
+import cloudinary
+import cloudinary.uploader
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
@@ -21,6 +23,12 @@ from app.core.email import send_verification_email
 
 router = APIRouter()
 security = HTTPBearer()
+
+cloudinary.config(
+    cloud_name=settings.CLOUDINARY_CLOUD_NAME,
+    api_key=settings.CLOUDINARY_API_KEY,
+    api_secret=settings.CLOUDINARY_API_SECRET
+)
 
 pending_email_updates = {}
 
@@ -183,28 +191,58 @@ def upload_avatar(
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
     
-    ext = file.filename.split('.')[-1]
-    filename = f"{uuid.uuid4()}.{ext}"
-    os.makedirs(os.path.join("uploads", "avatars"), exist_ok=True)
-    filepath = os.path.join("uploads", "avatars", filename)
-    
+    # Remove old avatar if exists
     if current_user.avatar_url:
-        old_filename = current_user.avatar_url.split('/')[-1]
-        old_filepath = os.path.join("uploads", "avatars", old_filename)
-        if os.path.exists(old_filepath):
+        if "res.cloudinary.com" in current_user.avatar_url:
             try:
-                os.remove(old_filepath)
-            except:
+                public_id = current_user.avatar_url.split('/')[-1].split('.')[0]
+                cloudinary.uploader.destroy(f"meeting_avatars/{public_id}")
+            except Exception as e:
                 pass
+        else:
+            old_filename = current_user.avatar_url.split('/')[-1]
+            old_filepath = os.path.join("uploads", "avatars", old_filename)
+            if os.path.exists(old_filepath):
+                try:
+                    os.remove(old_filepath)
+                except:
+                    pass
             
-    with open(filepath, "wb") as buffer:
+    # Save file locally first to avoid stream hanging issues
+    import uuid
+    import os
+    import shutil
+    ext = file.filename.split('.')[-1]
+    temp_filename = f"temp_{uuid.uuid4()}.{ext}"
+    temp_filepath = os.path.join("uploads", temp_filename)
+    os.makedirs("uploads", exist_ok=True)
+    
+    with open(temp_filepath, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
-    current_user.avatar_url = f"/uploads/avatars/{filename}"
-    db.commit()
-    db.refresh(current_user)
-    
-    return {"avatar_url": current_user.avatar_url}
+    # Upload to Cloudinary
+    try:
+        upload_result = cloudinary.uploader.upload(
+            temp_filepath,
+            folder="meeting_avatars",
+            transformation=[
+                {'width': 300, 'height': 300, 'crop': "fill", 'gravity': "face"}
+            ]
+        )
+        
+        # Clean up temp file
+        if os.path.exists(temp_filepath):
+            os.remove(temp_filepath)
+            
+        current_user.avatar_url = upload_result.get("secure_url")
+        db.commit()
+        db.refresh(current_user)
+        return {"avatar_url": current_user.avatar_url}
+    except Exception as e:
+        # Clean up temp file on error
+        if os.path.exists(temp_filepath):
+            os.remove(temp_filepath)
+        raise HTTPException(status_code=500, detail=f"Error uploading image to Cloudinary: {str(e)}")
 
 @router.delete("/me/avatar")
 def remove_avatar(
@@ -212,13 +250,20 @@ def remove_avatar(
     db: Session = Depends(get_db)
 ):
     if current_user.avatar_url:
-        old_filename = current_user.avatar_url.split('/')[-1]
-        old_filepath = os.path.join("uploads", "avatars", old_filename)
-        if os.path.exists(old_filepath):
+        if "res.cloudinary.com" in current_user.avatar_url:
             try:
-                os.remove(old_filepath)
-            except:
+                public_id = current_user.avatar_url.split('/')[-1].split('.')[0]
+                cloudinary.uploader.destroy(f"meeting_avatars/{public_id}")
+            except Exception as e:
                 pass
+        else:
+            old_filename = current_user.avatar_url.split('/')[-1]
+            old_filepath = os.path.join("uploads", "avatars", old_filename)
+            if os.path.exists(old_filepath):
+                try:
+                    os.remove(old_filepath)
+                except:
+                    pass
             
         current_user.avatar_url = None
         db.commit()
