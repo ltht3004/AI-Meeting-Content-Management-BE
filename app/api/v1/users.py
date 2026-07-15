@@ -7,8 +7,12 @@ from sqlalchemy import or_
 from app.core.database import get_db
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdate, UserResponse, PaginatedUserResponse
-from app.api.v1.profile import get_current_user
-from app.core.security import get_password_hash
+from app.api.v1.profile import get_current_user, pending_email_updates
+from app.core.security import get_password_hash, verify_password
+from app.core.email import send_verification_email
+import random
+from datetime import datetime, timedelta
+from pydantic import BaseModel
 
 router = APIRouter()
 
@@ -156,12 +160,10 @@ def update_user(
         raise HTTPException(status_code=404, detail="User not found")
         
     if user_in.email and user_in.email != user.email:
-        existing_user = db.query(User).filter(User.email == user_in.email).first()
-        if existing_user:
-            raise HTTPException(
-                status_code=400,
-                detail="Email is already in use by another user."
-            )
+        raise HTTPException(
+            status_code=400,
+            detail="Admin cannot change user email. Email editing is locked for security reasons."
+        )
 
     if user_in.phone and user_in.phone != user.phone:
         existing_phone = db.query(User).filter(User.phone == user_in.phone).first()
@@ -172,13 +174,18 @@ def update_user(
             )
             
     update_data = user_in.model_dump(exclude_unset=True)
+    # Remove email from update_data just to be absolutely sure
+    update_data.pop("email", None)
     
     for field, value in update_data.items():
-        setattr(user, field, value)
+        if value is not None:
+            setattr(user, field, value)
         
     db.commit()
     db.refresh(user)
+    
     return user
+
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_user(

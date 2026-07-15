@@ -33,9 +33,14 @@ class VerifyEmailRequest(BaseModel):
     email: EmailStr
     code: str
 
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
 class RegisterResponse(BaseModel):
     message: str
     email: str
+
+pending_registrations = {}
 
 @router.post("/register", response_model=RegisterResponse)
 def register(user: UserCreate, db: Session = Depends(get_db)):
@@ -49,52 +54,57 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Phone number already exists")
 
     code = f"{random.randint(100000, 999999)}"
-    
-    new_user = User(
-        full_name=user.full_name,
-        email=user.email,
-        phone=user.phone,
-        password=get_password_hash(user.password),
-        role=user.role or "user",
-        status="Pending",
-        reset_code=get_password_hash(code),
-        reset_code_expires_at=datetime.utcnow() + timedelta(minutes=15)
-    )
 
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    pending_registrations[user.email] = {
+        "full_name": user.full_name,
+        "email": user.email,
+        "phone": user.phone,
+        "password": get_password_hash(user.password),
+        "role": user.role or "user",
+        "code": get_password_hash(code),
+        "expires_at": datetime.utcnow() + timedelta(minutes=15)
+    }
 
-    send_verification_email(new_user.email, code)
+    send_verification_email(user.email, code)
     
     return {
         "message": "Verification email sent. Please check your inbox.",
-        "email": new_user.email
+        "email": user.email
     }
 
 @router.post("/verify-email", response_model=TokenResponse)
 def verify_email(req: VerifyEmailRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == req.email).first()
+    pending_user = pending_registrations.get(req.email)
     
-    if not user or not user.reset_code:
-        raise HTTPException(status_code=400, detail="Invalid or expired verification code")
+    if not pending_user:
+        raise HTTPException(status_code=400, detail="Session expired. Please register again.")
         
-    if not verify_password(req.code, user.reset_code):
-        raise HTTPException(status_code=400, detail="Invalid or expired verification code")
+    if not verify_password(req.code, pending_user["code"]):
+        raise HTTPException(status_code=400, detail="Invalid verification code.")
     
-    if user.reset_code_expires_at and user.reset_code_expires_at < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="Verification code has expired")
+    if pending_user["expires_at"] < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Verification code has expired. Please request a new one.")
         
-    user.status = "Active"
-    user.reset_code = None
-    user.reset_code_expires_at = None
+    new_user = User(
+        full_name=pending_user["full_name"],
+        email=pending_user["email"],
+        phone=pending_user["phone"],
+        password=pending_user["password"],
+        role=pending_user["role"],
+        status="Active"
+    )
+    
+    db.add(new_user)
     db.commit()
+    db.refresh(new_user)
     
-    access_token = create_access_token(subject=user.id)
+    del pending_registrations[req.email]
+    
+    access_token = create_access_token(subject=new_user.id)
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "user": user
+        "user": new_user
     }
 
 @router.post("/login", response_model=TokenResponse)
@@ -107,7 +117,10 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
     if not verify_password(user.password, db_user.password):
         raise HTTPException(status_code=400, detail="Incorrect password")
 
-    if db_user.status == "Unactive":
+    if db_user.status == "Pending":
+        raise HTTPException(status_code=403, detail="Please verify your email to activate your account")
+
+    if db_user.status in ["Inactive", "Unactive"]:
         raise HTTPException(status_code=403, detail="Account has been disabled")
 
     access_token = create_access_token(subject=db_user.id)
@@ -116,6 +129,21 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
         "token_type": "bearer",
         "user": db_user
     }
+
+@router.post("/resend-verification")
+def resend_verification(req: ResendVerificationRequest):
+    pending_user = pending_registrations.get(req.email)
+    
+    if not pending_user:
+        raise HTTPException(status_code=400, detail="Session expired. Please register again.")
+        
+    code = f"{random.randint(100000, 999999)}"
+    pending_user["code"] = get_password_hash(code)
+    pending_user["expires_at"] = datetime.utcnow() + timedelta(minutes=15)
+    
+    send_verification_email(req.email, code)
+    
+    return {"message": "A new verification code has been sent."}
 
 @router.post("/forgot-password")
 def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
