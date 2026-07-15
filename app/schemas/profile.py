@@ -24,6 +24,7 @@ class ProfileResponse(BaseModel):
     used_quota: int
     created_at: datetime
     updated_at: datetime
+    requires_email_verification: Optional[bool] = False
 
     class Config:
         from_attributes = True
