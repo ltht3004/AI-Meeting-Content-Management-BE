@@ -158,8 +158,8 @@ def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
     db.commit()
     
     send_reset_code_email(user.email, code)
+        
     return {"message": "If the email exists, a reset code has been sent."}
-
 @router.post("/reset-password")
 def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == req.email).first()
