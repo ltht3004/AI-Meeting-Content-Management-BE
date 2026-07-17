@@ -1,13 +1,15 @@
 from pathlib import Path
 from datetime import timezone
+from typing import Optional
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.meeting import Meeting
 from app.models.recording import Recording
+from app.models.user import User
 from app.schemas.recording import RecordingResponse
 from app.services.storage import build_recording_storage_path, delete_file_from_storage, upload_file_to_storage
 
@@ -41,6 +43,31 @@ def build_recording_response(recording: Recording) -> dict:
     }
 
 
+def validate_recording_manager(db: Session, meeting: Meeting, current_user_id: Optional[str]) -> None:
+    if not current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied: Only the creator or an admin can manage recordings"
+        )
+
+    try:
+        current_user_uuid = UUID(str(current_user_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid current user ID")
+
+    current_user = db.query(User).filter(User.id == current_user_uuid).first()
+    if not current_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    is_admin = current_user.role == "admin"
+    is_creator = meeting.user_id == current_user.id
+    if not is_admin and not is_creator:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied: Only the creator or an admin can manage recordings"
+        )
+
+
 @router.get("/meeting/{meeting_id}", response_model=list[RecordingResponse])
 def get_recordings_by_meeting(
     meeting_id: UUID,
@@ -63,11 +90,14 @@ def get_recordings_by_meeting(
 async def upload_recording(
     meeting_id: UUID,
     file: UploadFile = File(...),
+    current_user_id: Optional[str] = Query(None, description="Current logged in user ID"),
     db: Session = Depends(get_db)
 ):
     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
+
+    validate_recording_manager(db, meeting, current_user_id)
 
     original_name = Path(file.filename or "").name
     extension = Path(original_name).suffix.lower()
@@ -124,11 +154,18 @@ async def upload_recording(
 @router.delete("/{recording_id}")
 def delete_recording(
     recording_id: UUID,
+    current_user_id: Optional[str] = Query(None, description="Current logged in user ID"),
     db: Session = Depends(get_db)
 ):
     recording = db.query(Recording).filter(Recording.id == recording_id).first()
     if not recording:
         raise HTTPException(status_code=404, detail="Recording not found")
+
+    meeting = db.query(Meeting).filter(Meeting.id == recording.meeting_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    validate_recording_manager(db, meeting, current_user_id)
 
     delete_file_from_storage(recording.file_url)
 

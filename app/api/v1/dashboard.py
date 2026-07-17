@@ -17,7 +17,7 @@ router = APIRouter()
 
 
 def is_user_inactive(user: User) -> bool:
-    return str(user.status).lower() == "unactive"
+    return str(user.status).lower() in {"inactive", "unactive"}
 
 
 def get_month_bounds():
@@ -83,17 +83,17 @@ def get_dashboard_summary(
     db: Session = Depends(get_db)
 ):
     visible_meetings_query = get_visible_meetings_query(db, current_user_id)
-    meeting_ids_subquery = visible_meetings_query.with_entities(Meeting.id).subquery()
+    meeting_ids_select = visible_meetings_query.with_entities(Meeting.id).statement
 
     total_meetings = visible_meetings_query.count()
     total_recordings = db.query(Recording).filter(
-        Recording.meeting_id.in_(meeting_ids_subquery)
+        Recording.meeting_id.in_(meeting_ids_select)
     ).count()
     total_summaries = db.query(Summary).filter(
-        Summary.meeting_id.in_(meeting_ids_subquery)
+        Summary.meeting_id.in_(meeting_ids_select)
     ).count()
     total_transcripts = db.query(Transcript).join(Recording).filter(
-        Recording.meeting_id.in_(meeting_ids_subquery)
+        Recording.meeting_id.in_(meeting_ids_select)
     ).count()
 
     previous_month_start, current_month_start = get_month_bounds()
@@ -112,7 +112,7 @@ def get_dashboard_summary(
     total_storage_bytes = db.query(
         func.coalesce(func.sum(Recording.size), 0)
     ).filter(
-        Recording.meeting_id.in_(meeting_ids_subquery)
+        Recording.meeting_id.in_(meeting_ids_select)
     ).scalar() or 0
 
     summarized_duration_minutes = db.query(
@@ -120,7 +120,7 @@ def get_dashboard_summary(
     ).join(
         Summary, Summary.meeting_id == Meeting.id
     ).filter(
-        Meeting.id.in_(meeting_ids_subquery)
+        Meeting.id.in_(meeting_ids_select)
     ).scalar() or 0
 
     recent_meetings = visible_meetings_query.order_by(
@@ -142,7 +142,7 @@ def get_dashboard_summary(
     recent_recordings = db.query(Recording, Meeting).join(
         Meeting, Recording.meeting_id == Meeting.id
     ).filter(
-        Recording.meeting_id.in_(meeting_ids_subquery)
+        Recording.meeting_id.in_(meeting_ids_select)
     ).order_by(
         Recording.created_at.desc()
     ).limit(5).all()
@@ -158,7 +158,7 @@ def get_dashboard_summary(
     ).join(
         Meeting, Recording.meeting_id == Meeting.id
     ).filter(
-        Recording.meeting_id.in_(meeting_ids_subquery)
+        Recording.meeting_id.in_(meeting_ids_select)
     ).order_by(
         Transcript.created_at.desc()
     ).limit(5).all()
@@ -172,7 +172,7 @@ def get_dashboard_summary(
     recent_summaries = db.query(Summary, Meeting).join(
         Meeting, Summary.meeting_id == Meeting.id
     ).filter(
-        Summary.meeting_id.in_(meeting_ids_subquery)
+        Summary.meeting_id.in_(meeting_ids_select)
     ).order_by(
         Summary.created_at.desc()
     ).limit(5).all()
