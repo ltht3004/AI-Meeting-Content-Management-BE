@@ -1,8 +1,7 @@
 import os
 import uuid
 import shutil
-import cloudinary
-import cloudinary.uploader
+from app.services.storage import upload_file_to_storage
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
@@ -24,11 +23,6 @@ from app.core.email import send_verification_email
 router = APIRouter()
 security = HTTPBearer()
 
-cloudinary.config(
-    cloud_name=settings.CLOUDINARY_CLOUD_NAME,
-    api_key=settings.CLOUDINARY_API_KEY,
-    api_secret=settings.CLOUDINARY_API_SECRET
-)
 
 pending_email_updates = {}
 
@@ -191,82 +185,104 @@ def upload_avatar(
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
     
-    # Remove old avatar if exists
-    if current_user.avatar_url:
-        if "res.cloudinary.com" in current_user.avatar_url:
+    # Remove old avatar if exists (only local for now)
+    if current_user.avatar_url and not "supabase.co" in current_user.avatar_url:
+        old_filename = current_user.avatar_url.split('/')[-1]
+        old_filepath = os.path.join("uploads", "avatars", old_filename)
+        if os.path.exists(old_filepath):
             try:
-                public_id = current_user.avatar_url.split('/')[-1].split('.')[0]
-                cloudinary.uploader.destroy(f"meeting_avatars/{public_id}")
-            except Exception as e:
+                os.remove(old_filepath)
+            except:
                 pass
-        else:
-            old_filename = current_user.avatar_url.split('/')[-1]
-            old_filepath = os.path.join("uploads", "avatars", old_filename)
-            if os.path.exists(old_filepath):
-                try:
-                    os.remove(old_filepath)
-                except:
-                    pass
             
-    # Save file locally first to avoid stream hanging issues
     import uuid
-    import os
-    import shutil
     ext = file.filename.split('.')[-1]
-    temp_filename = f"temp_{uuid.uuid4()}.{ext}"
-    temp_filepath = os.path.join("uploads", temp_filename)
-    os.makedirs("uploads", exist_ok=True)
+    new_filename = f"avatar_{current_user.id}_{uuid.uuid4()}.{ext}"
+    object_path = f"avatars/{new_filename}"
     
-    with open(temp_filepath, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-        
-    # Upload to Cloudinary
+    contents = file.file.read()
+    
     try:
-        upload_result = cloudinary.uploader.upload(
-            temp_filepath,
-            folder="meeting_avatars",
-            transformation=[
-                {'width': 300, 'height': 300, 'crop': "fill", 'gravity': "face"}
-            ]
+        secure_url = upload_file_to_storage(
+            contents=contents,
+            object_path=object_path,
+            content_type=file.content_type
         )
         
-        # Clean up temp file
-        if os.path.exists(temp_filepath):
-            os.remove(temp_filepath)
-            
-        current_user.avatar_url = upload_result.get("secure_url")
+        current_user.avatar_url = secure_url
         db.commit()
         db.refresh(current_user)
         return {"avatar_url": current_user.avatar_url}
     except Exception as e:
-        # Clean up temp file on error
-        if os.path.exists(temp_filepath):
-            os.remove(temp_filepath)
-        raise HTTPException(status_code=500, detail=f"Error uploading image to Cloudinary: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error uploading image to Supabase: {str(e)}")
 
 @router.delete("/me/avatar")
 def remove_avatar(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if current_user.avatar_url:
-        if "res.cloudinary.com" in current_user.avatar_url:
+    if current_user.avatar_url and not "supabase.co" in current_user.avatar_url:
+        old_filename = current_user.avatar_url.split('/')[-1]
+        old_filepath = os.path.join("uploads", "avatars", old_filename)
+        if os.path.exists(old_filepath):
             try:
-                public_id = current_user.avatar_url.split('/')[-1].split('.')[0]
-                cloudinary.uploader.destroy(f"meeting_avatars/{public_id}")
-            except Exception as e:
+                os.remove(old_filepath)
+            except:
                 pass
-        else:
-            old_filename = current_user.avatar_url.split('/')[-1]
-            old_filepath = os.path.join("uploads", "avatars", old_filename)
-            if os.path.exists(old_filepath):
-                try:
-                    os.remove(old_filepath)
-                except:
-                    pass
             
         current_user.avatar_url = None
         db.commit()
         db.refresh(current_user)
         
     return {"message": "Avatar removed successfully"}
+
+@router.get("/migrate-avatars")
+def migrate_avatars(db: Session = Depends(get_db)):
+    import os
+    import uuid
+    from app.services.storage import upload_file_to_storage
+    
+    users = db.query(User).filter(User.avatar_url.isnot(None)).all()
+    migrated_count = 0
+    errors = []
+    
+    for user in users:
+        # Check if it's a local avatar (not starting with http)
+        if user.avatar_url and not user.avatar_url.startswith("http"):
+            old_filename = user.avatar_url.split('/')[-1]
+            old_filepath = os.path.join("uploads", "avatars", old_filename)
+            
+            if os.path.exists(old_filepath):
+                try:
+                    with open(old_filepath, "rb") as f:
+                        contents = f.read()
+                    
+                    ext = old_filename.split('.')[-1]
+                    new_filename = f"avatar_{user.id}_{uuid.uuid4()}.{ext}"
+                    object_path = f"avatars/{new_filename}"
+                    
+                    # Determine content type
+                    content_type = "image/jpeg"
+                    if ext.lower() in ['png']: content_type = "image/png"
+                    elif ext.lower() in ['gif']: content_type = "image/gif"
+                    elif ext.lower() in ['webp']: content_type = "image/webp"
+                    
+                    secure_url = upload_file_to_storage(
+                        contents=contents,
+                        object_path=object_path,
+                        content_type=content_type
+                    )
+                    
+                    user.avatar_url = secure_url
+                    migrated_count += 1
+                except Exception as e:
+                    errors.append(f"Failed for user {user.email}: {str(e)}")
+    
+    if migrated_count > 0:
+        db.commit()
+        
+    return {
+        "message": "Migration completed",
+        "migrated_count": migrated_count,
+        "errors": errors
+    }
