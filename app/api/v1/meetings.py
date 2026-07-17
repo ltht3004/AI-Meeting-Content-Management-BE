@@ -19,7 +19,7 @@ router = APIRouter()
 
 
 def is_user_inactive(user: User) -> bool:
-    return str(user.status).lower() == "unactive"
+    return str(user.status).lower() in {"inactive", "unactive"}
 
 
 def utc_isoformat(value):
