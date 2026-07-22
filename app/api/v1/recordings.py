@@ -44,6 +44,7 @@ def build_recording_response(recording: Recording) -> dict:
 
 
 def validate_recording_manager(db: Session, meeting: Meeting, current_user_id: Optional[str]) -> None:
+    # Recording management is stricter than viewing: only meeting creator or admin can change files.
     if not current_user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -99,6 +100,8 @@ async def upload_recording(
 
     validate_recording_manager(db, meeting, current_user_id)
 
+    # Validate file type before reading content.
+    # Browser MIME types can be inconsistent, so extension is the stable check here.
     original_name = Path(file.filename or "").name
     extension = Path(original_name).suffix.lower()
     if extension not in ALLOWED_AUDIO_EXTENSIONS:
@@ -107,27 +110,33 @@ async def upload_recording(
             detail="Only audio files are allowed (.mp3, .wav, .m4a, .ogg, .opus, .aac, .flac)"
         )
 
+    # Reject oversized uploads early when the client provides file size.
     if file.size and file.size > MAX_RECORDING_SIZE_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File size must not exceed {MAX_RECORDING_SIZE_LABEL}."
         )
 
+    # Generate a unique cloud filename while preserving the original extension.
     stored_name = f"{uuid4()}{extension}"
 
     contents = await file.read()
+
+    # Reject empty files before uploading anything to cloud storage.
     if not contents:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded file is empty"
         )
 
+    # Re-check size after reading because UploadFile.size may be missing for some clients.
     if len(contents) > MAX_RECORDING_SIZE_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File size must not exceed {MAX_RECORDING_SIZE_LABEL}."
         )
 
+    # Upload binary audio to Supabase Storage; the database stores metadata and URL only.
     content_type = file.content_type or "audio/mpeg"
     storage_path = build_recording_storage_path(str(meeting_id), stored_name)
     file_url = upload_file_to_storage(
@@ -136,6 +145,7 @@ async def upload_recording(
         content_type=content_type
     )
 
+    # Save recording metadata only after the cloud upload succeeds.
     recording = Recording(
         meeting_id=meeting_id,
         file_name=original_name,
@@ -167,6 +177,7 @@ def delete_recording(
 
     validate_recording_manager(db, meeting, current_user_id)
 
+    # Delete the cloud object before removing the database record to avoid orphaned files.
     delete_file_from_storage(recording.file_url)
 
     db.delete(recording)

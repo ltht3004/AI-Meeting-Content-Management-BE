@@ -36,6 +36,7 @@ def validate_meeting_access(db: Session, meeting: Meeting, current_user_id: Opti
     if not current_user_id:
         return
 
+    # A non-admin user can only access meetings they created or joined as a participant.
     try:
         from uuid import UUID as pyUUID
         user_uuid = pyUUID(str(current_user_id))
@@ -94,6 +95,7 @@ def format_bytes(size: int) -> str:
 
 
 def build_export_data(db: Session, meeting: Meeting) -> dict:
+    # Collect all meeting-related data in one shape so PDF and DOCX exports stay consistent.
     names_str, details = resolve_participants_names(db, meeting.participants)
     recordings = db.query(Recording).filter(
         Recording.meeting_id == meeting.id
@@ -131,8 +133,8 @@ def resolve_participants_names(db: Session, participants_str: Optional[str]) -> 
     if not participants_str:
         return "", []
         
+    # Resolve stored participant UUIDs into display names and status for the frontend.    
     raw_ids = [i.strip() for i in participants_str.split(",") if i.strip()]
-    
     from uuid import UUID as pyUUID
     uuids = []
     invalid_names = []
@@ -177,6 +179,7 @@ def resolve_names_to_ids(db: Session, participants_str: Optional[str]) -> Option
     if not participants_str:
         return participants_str
         
+    # Keep backward compatibility with old name/email payloads while storing UUIDs going forward.
     raw_items = [i.strip() for i in participants_str.split(",") if i.strip()]
     
     from uuid import UUID as pyUUID
@@ -272,6 +275,7 @@ def get_meetings(
     query = db.query(Meeting)
     
     if current_user_id:
+        # Admins see all meetings; normal users only see meetings they created or joined.
         try:
             from uuid import UUID as pyUUID
             user_uuid = pyUUID(str(current_user_id))
@@ -307,6 +311,7 @@ def get_meetings(
         )
     
     total_count = query.count()
+    # Newest meetings are shown first on both dashboard and meeting list.
     query = query.order_by(Meeting.created_at.desc())
     offset = (page - 1) * page_size
     meetings = query.offset(offset).limit(page_size).all()
@@ -326,6 +331,7 @@ def export_meeting_report(
     current_user_id: Optional[str] = Query(None, description="Current logged in user ID to validate export permission"),
     db: Session = Depends(get_db)
 ):
+    # Load the meeting first so export permissions and report data use the same source record.
     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
 
     if not meeting:
@@ -333,9 +339,11 @@ def export_meeting_report(
 
     validate_meeting_access(db, meeting, current_user_id)
 
+    # Export reuses the same normalized data for both PDF and Word output.
     export_data = build_export_data(db, meeting)
 
     try:
+        # Generate the selected binary report format from the normalized export payload.
         if format == "docx":
             file_buffer = generate_docx_report(export_data)
             media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -347,6 +355,7 @@ def export_meeting_report(
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    # Create a download-safe ASCII filename from the meeting title.
     normalized_title = unicodedata.normalize("NFD", meeting.title)
     ascii_title = "".join(
         ch for ch in normalized_title
@@ -429,6 +438,7 @@ def create_meeting(
     meeting: MeetingCreate,
     db: Session = Depends(get_db)
 ):
+    # Validate the creator account before saving the meeting.
     user = db.query(User).filter(User.id == meeting.user_id).first()
 
     if not user:
@@ -440,6 +450,7 @@ def create_meeting(
             detail="Account has been disabled"
         )
 
+    # Build the meeting record from form data and normalize participants before persisting.
     new_meeting = Meeting(
         user_id=meeting.user_id,
         title=meeting.title,
@@ -447,6 +458,7 @@ def create_meeting(
         meeting_date=meeting.meeting_date,
         location=meeting.location,
         duration=meeting.duration,
+        # Store participant UUIDs, not names, so renamed users still resolve correctly later.
         participants=resolve_names_to_ids(db, meeting.participants),
         status=meeting.status
     )
@@ -465,6 +477,7 @@ def update_meeting(
     db: Session = Depends(get_db),
     current_user_id: Optional[str] = Query(None, description="Mock current logged in user ID")
 ):
+    # Load the existing meeting so permission checks and partial updates target one record.
     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
 
     if not meeting:
@@ -493,8 +506,10 @@ def update_meeting(
                 detail="Permission denied: Only the creator or an admin can edit this meeting"
             )
 
+    # Only update fields submitted by the edit form.
     update_data = meeting_update.model_dump(exclude_unset=True)
     if "participants" in update_data:
+        # Edit form may submit UUIDs or legacy names, so normalize before saving.
         update_data["participants"] = resolve_names_to_ids(db, update_data["participants"])
 
     for key, value in update_data.items():

@@ -21,6 +21,7 @@ def is_user_inactive(user: User) -> bool:
 
 
 def get_month_bounds():
+    # Build month boundaries for comparing current-month meetings with previous month.
     now = datetime.now()
     current_month_start = datetime(now.year, now.month, 1)
 
@@ -33,6 +34,7 @@ def get_month_bounds():
 
 
 def calculate_growth_percent(current_count: int, previous_count: int):
+    # Avoid division by zero when the previous month has no meetings.
     if previous_count == 0:
         if current_count == 0:
             return 0
@@ -42,6 +44,7 @@ def calculate_growth_percent(current_count: int, previous_count: int):
 
 
 def get_visible_meetings_query(db: Session, current_user_id: Optional[str]):
+    # Start with all meetings, then narrow the query based on the current user's role.
     query = db.query(Meeting)
 
     if not current_user_id:
@@ -65,6 +68,7 @@ def get_visible_meetings_query(db: Session, current_user_id: Optional[str]):
     if current_user.role == "admin":
         return query
 
+    # Normal users only see meetings they created or joined as participants.
     user_name = current_user.full_name
     user_email = current_user.email
     user_id_str = str(current_user.id)
@@ -82,9 +86,11 @@ def get_dashboard_summary(
     current_user_id: Optional[str] = Query(None, description="Current logged in user ID"),
     db: Session = Depends(get_db)
 ):
+    # Reuse one permission-aware meeting query for every dashboard metric.
     visible_meetings_query = get_visible_meetings_query(db, current_user_id)
     meeting_ids_select = visible_meetings_query.with_entities(Meeting.id).statement
 
+    # Count core entities visible to the current user.
     total_meetings = visible_meetings_query.count()
     total_recordings = db.query(Recording).filter(
         Recording.meeting_id.in_(meeting_ids_select)
@@ -96,6 +102,7 @@ def get_dashboard_summary(
         Recording.meeting_id.in_(meeting_ids_select)
     ).count()
 
+    # Calculate real meeting growth from database records, not a hard-coded frontend label.
     previous_month_start, current_month_start = get_month_bounds()
     current_month_meetings = visible_meetings_query.filter(
         Meeting.created_at >= current_month_start
@@ -109,12 +116,14 @@ def get_dashboard_summary(
         previous_month_meetings
     )
 
+    # Sum recording file sizes to show actual storage used by visible meetings.
     total_storage_bytes = db.query(
         func.coalesce(func.sum(Recording.size), 0)
     ).filter(
         Recording.meeting_id.in_(meeting_ids_select)
     ).scalar() or 0
 
+    # Estimate time covered by AI summaries using the durations of summarized meetings.
     summarized_duration_minutes = db.query(
         func.coalesce(func.sum(Meeting.duration), 0)
     ).join(
@@ -123,12 +132,15 @@ def get_dashboard_summary(
         Meeting.id.in_(meeting_ids_select)
     ).scalar() or 0
 
+    # Dashboard shows only the latest 5 meetings to keep the card compact.
     recent_meetings = visible_meetings_query.order_by(
         Meeting.created_at.desc()
     ).limit(5).all()
 
+    # Recent activity merges different event types into one timeline.
     activities = []
 
+    # Meeting creation events.
     recent_meeting_activities = visible_meetings_query.order_by(
         Meeting.created_at.desc()
     ).limit(5).all()
@@ -139,6 +151,7 @@ def get_dashboard_summary(
             "created_at": meeting.created_at.isoformat() if meeting.created_at else None
         })
 
+    # Recording upload events.
     recent_recordings = db.query(Recording, Meeting).join(
         Meeting, Recording.meeting_id == Meeting.id
     ).filter(
@@ -153,6 +166,7 @@ def get_dashboard_summary(
             "created_at": recording.created_at.isoformat() if recording.created_at else None
         })
 
+    # Transcript generation events.
     recent_transcripts = db.query(Transcript, Recording, Meeting).join(
         Recording, Transcript.recording_id == Recording.id
     ).join(
@@ -169,6 +183,7 @@ def get_dashboard_summary(
             "created_at": transcript.created_at.isoformat() if transcript.created_at else None
         })
 
+    # AI summary generation events.
     recent_summaries = db.query(Summary, Meeting).join(
         Meeting, Summary.meeting_id == Meeting.id
     ).filter(
@@ -183,6 +198,7 @@ def get_dashboard_summary(
             "created_at": summary.created_at.isoformat() if summary.created_at else None
         })
 
+    # Sort all activity types together and keep only the newest 5 items.
     recent_activities = sorted(
         activities,
         key=lambda activity: activity["created_at"] or "",

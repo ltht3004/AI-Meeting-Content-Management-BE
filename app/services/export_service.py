@@ -11,6 +11,7 @@ def _register_pdf_fonts() -> tuple[str, str]:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
 
+    # Use Unicode fonts when available so Vietnamese names/locations render correctly in PDF.
     font_candidates = [
         (
             Path("C:/Windows/Fonts/arial.ttf"),
@@ -159,6 +160,7 @@ def generate_pdf_report(meeting_data: dict) -> BytesIO:
     participants = meeting_data.get("participants") or []
     if participants:
         if len(participants) > 8:
+            # Long participant lists are split into 3 columns to avoid wasting vertical space.
             row_count = (len(participants) + 2) // 3
             columns = [
                 participants[0:row_count],
@@ -251,6 +253,7 @@ def generate_docx_report(meeting_data: dict) -> BytesIO:
             element.set(qn("w:color"), color)
 
     def format_run(run, size=10, bold=False, color="1F2937"):
+        # Force Arial for Latin and East Asian text so Word displays Vietnamese consistently.
         run.font.name = "Arial"
         run._element.rPr.rFonts.set(qn("w:eastAsia"), "Arial")
         run.font.size = Pt(size)
@@ -346,6 +349,7 @@ def generate_docx_report(meeting_data: dict) -> BytesIO:
     participants = meeting_data.get("participants") or []
     if participants:
         if len(participants) > 8:
+            # Match the PDF layout: long participant lists are rendered in 3 columns.
             row_count = (len(participants) + 2) // 3
             columns = [
                 participants[0:row_count],
