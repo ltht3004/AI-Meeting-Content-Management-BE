@@ -54,7 +54,7 @@ def _paragraph(text, style):
 def generate_pdf_report(meeting_data: dict) -> BytesIO:
     try:
         from reportlab.lib import colors
-        from reportlab.lib.enums import TA_CENTER
+        from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
         from reportlab.lib.units import mm
@@ -108,6 +108,12 @@ def generate_pdf_report(meeting_data: dict) -> BytesIO:
         "BodyTextUnicodeBold",
         parent=body_style,
         fontName=bold_font,
+    )
+    transcript_style = ParagraphStyle(
+        "TranscriptTextUnicode",
+        parent=body_style,
+        alignment=TA_JUSTIFY,
+        spaceAfter=6,
     )
     bullet_style = ParagraphStyle(
         "BulletTextUnicode",
@@ -207,7 +213,7 @@ def generate_pdf_report(meeting_data: dict) -> BytesIO:
     if transcripts:
         for item in transcripts:
             story.append(_paragraph(_value(item.get("recording_name")), body_bold_style))
-            story.append(_paragraph(_value(item.get("content"), "No transcript content."), body_style))
+            story.append(_paragraph(_value(item.get("content"), "No transcript content."), transcript_style))
             story.append(Spacer(1, 6))
     else:
         story.append(_paragraph("No transcript available.", body_style))
@@ -273,6 +279,11 @@ def generate_docx_report(meeting_data: dict) -> BytesIO:
         paragraph.paragraph_format.space_after = Pt(6)
         paragraph.paragraph_format.line_spacing = 1.15
         format_run(paragraph.add_run(str(text)), size=10)
+        return paragraph
+
+    def add_transcript_body(text: str):
+        paragraph = add_body(text)
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         return paragraph
 
     def add_bullet(text: str):
@@ -396,7 +407,7 @@ def generate_docx_report(meeting_data: dict) -> BytesIO:
             recording_name.paragraph_format.space_before = Pt(4)
             recording_name.paragraph_format.space_after = Pt(2)
             format_run(recording_name.add_run(_value(item.get("recording_name"))), bold=True, color="0284C7")
-            add_body(_value(item.get("content"), "No transcript content."))
+            add_transcript_body(_value(item.get("content"), "No transcript content."))
     else:
         add_body("No transcript available.")
 

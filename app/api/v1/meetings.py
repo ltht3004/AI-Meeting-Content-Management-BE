@@ -95,7 +95,7 @@ def format_bytes(size: int) -> str:
 
 
 def build_export_data(db: Session, meeting: Meeting) -> dict:
-    # Collect all meeting-related data in one shape so PDF and DOCX exports stay consistent.
+    # Collect all meeting-z data in one shape so PDF and DOCX exports stay consistent.
     names_str, details = resolve_participants_names(db, meeting.participants)
     recordings = db.query(Recording).filter(
         Recording.meeting_id == meeting.id

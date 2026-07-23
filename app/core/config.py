@@ -16,7 +16,8 @@ class Settings(BaseSettings):
     CLOUDINARY_CLOUD_NAME: str = ""
     CLOUDINARY_API_KEY: str = ""
     CLOUDINARY_API_SECRET: str = ""
-
+    WHISPER_API_URL: str = ""
+    
     class Config:
         env_file = ".env"
         case_sensitive = True
