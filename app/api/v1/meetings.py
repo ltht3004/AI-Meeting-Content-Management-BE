@@ -232,6 +232,7 @@ def format_meeting_response(db: Session, meeting: Meeting) -> dict:
         "participants": names_str,
         "participant_details": details,
         "status": meeting.status,
+        "summary": {"content": meeting.summary.content} if meeting.summary else None,
         "created_at": utc_isoformat(meeting.created_at),
         "updated_at": utc_isoformat(meeting.updated_at),
     }

@@ -103,6 +103,7 @@ def generate_pdf_report(meeting_data: dict) -> BytesIO:
         fontSize=10,
         leading=15,
         textColor=colors.HexColor("#1f2937"),
+        spaceBefore=2,
     )
     body_bold_style = ParagraphStyle(
         "BodyTextUnicodeBold",
@@ -120,6 +121,7 @@ def generate_pdf_report(meeting_data: dict) -> BytesIO:
         parent=body_style,
         leftIndent=12,
         firstLineIndent=-8,
+        spaceBefore=2,
     )
 
     document = SimpleDocTemplate(
@@ -158,10 +160,13 @@ def generate_pdf_report(meeting_data: dict) -> BytesIO:
     story.extend([
         _paragraph("Meeting Information", section_style),
         info_table,
-        _paragraph("Description", section_style),
-        _paragraph(_value(meeting_data.get("description"), "No description."), body_style),
-        _paragraph("Participants", section_style),
     ])
+    if meeting_data.get("description") and str(meeting_data.get("description")).strip():
+        story.extend([
+            _paragraph("Description", section_style),
+            _paragraph(meeting_data.get("description"), body_style),
+        ])
+    story.append(_paragraph("Participants", section_style))
 
     participants = meeting_data.get("participants") or []
     if participants:
@@ -195,18 +200,24 @@ def generate_pdf_report(meeting_data: dict) -> BytesIO:
     else:
         story.append(_paragraph("No participants.", body_style))
 
-    story.extend([
-        _paragraph("AI Summary", section_style),
-        _paragraph(_value(meeting_data.get("summary"), "No summary generated yet."), body_style),
-        _paragraph("Recordings", section_style),
-    ])
-
+    story.append(_paragraph("Recordings", section_style))
     recordings = meeting_data.get("recordings") or []
     if recordings:
         for recording in recordings:
             story.append(_paragraph(f"- {_value(recording.get('file_name'))} ({_value(recording.get('size_label'))})", bullet_style))
     else:
         story.append(_paragraph("No recordings uploaded.", body_style))
+
+    story.append(_paragraph("AI Summary", section_style))
+    summary_text = meeting_data.get("summary")
+    if summary_text:
+        for line in summary_text.split("\n"):
+            if line.strip():
+                story.append(_paragraph(line, transcript_style))
+            else:
+                story.append(Spacer(1, 6))
+    else:
+        story.append(_paragraph("No summary generated yet.", body_style))
 
     story.append(_paragraph("Transcript", section_style))
     transcripts = meeting_data.get("transcripts") or []
@@ -353,8 +364,9 @@ def generate_docx_report(meeting_data: dict) -> BytesIO:
         format_run(row[0].paragraphs[0].add_run(label), bold=True, color="0F172A")
         format_run(row[1].paragraphs[0].add_run(str(_value(value))))
 
-    add_section("Description")
-    add_body(_value(meeting_data.get("description"), "No description."))
+    if meeting_data.get("description") and str(meeting_data.get("description")).strip():
+        add_section("Description")
+        add_body(meeting_data.get("description"))
 
     add_section("Participants")
     participants = meeting_data.get("participants") or []
@@ -386,9 +398,6 @@ def generate_docx_report(meeting_data: dict) -> BytesIO:
     else:
         add_body("No participants.")
 
-    add_section("AI Summary")
-    add_body(_value(meeting_data.get("summary"), "No summary generated yet."))
-
     add_section("Recordings")
     recordings = meeting_data.get("recordings") or []
     if recordings:
@@ -398,6 +407,15 @@ def generate_docx_report(meeting_data: dict) -> BytesIO:
             )
     else:
         add_body("No recordings uploaded.")
+
+    add_section("AI Summary")
+    summary_text = meeting_data.get("summary")
+    if summary_text:
+        for line in summary_text.split("\n"):
+            if line.strip():
+                add_transcript_body(line)
+    else:
+        add_body("No summary generated yet.")
 
     add_section("Transcript")
     transcripts = meeting_data.get("transcripts") or []
