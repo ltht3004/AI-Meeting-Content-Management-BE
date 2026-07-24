@@ -2,6 +2,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Optional
 from uuid import UUID, uuid4
+import urllib.request
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
@@ -258,6 +259,42 @@ async def upload_recording(
 
         print("TRANSCRIPT SAVED:", transcript.id)
 
+        # Generate and save AI Summary for the entire meeting
+        try:
+            print("START GENERATING SUMMARY FOR MEETING:", meeting_id)
+            from app.services.ai_summary import summarize_transcript
+            from app.models.summary import Summary
+
+            # Fetch all transcripts for this meeting
+            all_recordings = db.query(Recording).filter(Recording.meeting_id == meeting_id).all()
+            recording_ids = [r.id for r in all_recordings]
+            
+            all_transcripts = db.query(Transcript).filter(Transcript.recording_id.in_(recording_ids)).all()
+            
+            # Combine transcript contents
+            combined_content = "\n\n".join([t.content for t in all_transcripts if t.content])
+            
+            if combined_content:
+                summary_text = await summarize_transcript(combined_content)
+                
+                # Check if a summary already exists
+                existing_summary = db.query(Summary).filter(Summary.meeting_id == meeting_id).first()
+                if existing_summary:
+                    existing_summary.content = summary_text
+                else:
+                    new_summary = Summary(
+                        meeting_id=meeting_id,
+                        content=summary_text
+                    )
+                    db.add(new_summary)
+                
+                db.commit()
+                print("SUMMARY GENERATED AND SAVED")
+        except Exception as e:
+            print(f"FAILED TO GENERATE SUMMARY: {str(e)}")
+            # Do not rollback the transcript, just log the summary failure
+
+
     except RuntimeError as exc:
         # Roll back only the current failed transcript transaction.
         # The recording was committed previously, so it remains in the database.
@@ -272,6 +309,125 @@ async def upload_recording(
         ) from exc
 
     return build_recording_response(recording)
+
+@router.post("/{recording_id}/retry", response_model=RecordingResponse)
+async def retry_transcription(
+    recording_id: UUID,
+    current_user_id: UUID = Query(...),
+    db: Session = Depends(get_db)
+):
+    recording = db.query(Recording).filter(Recording.id == recording_id).first()
+    if not recording:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recording not found."
+        )
+
+    meeting = db.query(Meeting).filter(Meeting.id == recording.meeting_id).first()
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meeting not found."
+        )
+
+    # Check permission
+    is_admin = False
+    current_user = db.query(User).filter(User.id == current_user_id).first()
+    if current_user and current_user.role == "admin":
+        is_admin = True
+
+    if not is_admin and meeting.creator_id != current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only meeting creator or admin can retry transcription."
+        )
+
+    # Ensure transcript does not already exist
+    existing_transcript = db.query(Transcript).filter(Transcript.recording_id == recording.id).first()
+    if existing_transcript:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Transcription already exists for this recording."
+        )
+
+    try:
+        # Download file from Supabase URL
+        print("DOWNLOADING AUDIO FOR RETRY:", recording.file_url)
+        # Using a custom request with a dummy User-Agent in case needed, but Supabase public bucket usually doesn't care
+        req = urllib.request.Request(recording.file_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=120) as response:
+            contents = response.read()
+
+    except Exception as e:
+        print("DOWNLOAD FAILED:", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to download audio from cloud storage: {str(e)}"
+        )
+
+    try:
+        print("START TRANSCRIBING (RETRY):", recording.id)
+
+        transcription_result = await transcribe_audio(
+            file_content=contents,
+            file_name=recording.file_name,
+            content_type=recording.file_type,
+        )
+
+        print("WHISPER RESULT (RETRY):", transcription_result)
+
+        transcript = Transcript(
+            recording_id=recording.id,
+            content=transcription_result["text"],
+            language=transcription_result.get("language"),
+        )
+
+        db.add(transcript)
+        db.commit()
+        db.refresh(transcript)
+
+        print("TRANSCRIPT SAVED (RETRY):", transcript.id)
+
+        # Generate and save AI Summary for the entire meeting
+        try:
+            print("START GENERATING SUMMARY FOR MEETING (RETRY):", meeting.id)
+            from app.services.ai_summary import summarize_transcript
+            from app.models.summary import Summary
+
+            all_recordings = db.query(Recording).filter(Recording.meeting_id == meeting.id).all()
+            recording_ids = [r.id for r in all_recordings]
+            
+            all_transcripts = db.query(Transcript).filter(Transcript.recording_id.in_(recording_ids)).all()
+            
+            combined_content = "\n\n".join([t.content for t in all_transcripts if t.content])
+            
+            if combined_content:
+                summary_text = await summarize_transcript(combined_content)
+                
+                existing_summary = db.query(Summary).filter(Summary.meeting_id == meeting.id).first()
+                if existing_summary:
+                    existing_summary.content = summary_text
+                else:
+                    new_summary = Summary(
+                        meeting_id=meeting.id,
+                        content=summary_text
+                    )
+                    db.add(new_summary)
+                
+                db.commit()
+                print("SUMMARY GENERATED AND SAVED (RETRY)")
+        except Exception as e:
+            print(f"FAILED TO GENERATE SUMMARY (RETRY): {str(e)}")
+
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Transcription retry failed: {str(exc)}",
+        ) from exc
+
+    return build_recording_response(recording)
+
 
 @router.get("/{recording_id}/transcript")
 def get_transcript_by_recording(
