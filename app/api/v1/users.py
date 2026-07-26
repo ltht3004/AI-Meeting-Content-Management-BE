@@ -109,9 +109,21 @@ def get_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    from app.models.meeting import Meeting
+    from app.models.recording import Recording
+    from sqlalchemy.sql import func
+    
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+        
+    used_duration_seconds = db.query(
+        func.coalesce(func.sum(Recording.duration), 0)
+    ).join(Meeting, Recording.meeting_id == Meeting.id).filter(Meeting.user_id == user_id).scalar()
+    
+    used_duration_minutes = (used_duration_seconds or 0) / 60
+    user.used_quota = int(used_duration_minutes)
+    
     return user
 
 @router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)

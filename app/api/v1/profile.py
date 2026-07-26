@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 from app.core.database import get_db
 from app.core.config import settings
 from app.models.user import User
@@ -59,10 +60,18 @@ def get_profile(current_user: User = Depends(get_current_user)):
 
 @router.get("/me/stats", response_model=ProfileStatsResponse)
 def get_profile_stats(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.models.recording import Recording
+    
     total_meetings = db.query(Meeting).filter(Meeting.user_id == current_user.id).count()
     total_recordings = db.query(Recording).join(Meeting).filter(Meeting.user_id == current_user.id).count()
     total_transcripts = db.query(Transcript).join(Recording).join(Meeting).filter(Meeting.user_id == current_user.id).count()
     total_summaries = db.query(Summary).join(Meeting).filter(Meeting.user_id == current_user.id).count()
+
+    used_duration_seconds = db.query(
+        func.coalesce(func.sum(Recording.duration), 0)
+    ).join(Meeting, Recording.meeting_id == Meeting.id).filter(Meeting.user_id == current_user.id).scalar()
+    
+    used_duration_minutes = (used_duration_seconds or 0) / 60
 
     reset_date_str = current_user.reset_date.strftime("%b %d, %Y") if current_user.reset_date else "N/A"
 
@@ -75,7 +84,7 @@ def get_profile_stats(current_user: User = Depends(get_current_user), db: Sessio
         "transcriptsGrowth": 0,
         "totalSummaries": total_summaries,
         "summariesGrowth": 0,
-        "usedQuota": current_user.used_quota or 0,
+        "usedQuota": int(used_duration_minutes),
         "totalQuota": current_user.total_quota or 600,
         "resetDate": reset_date_str
     }

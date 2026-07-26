@@ -124,13 +124,17 @@ def get_dashboard_summary(
     ).scalar() or 0
 
     # Estimate time covered by AI summaries using the durations of summarized meetings.
-    summarized_duration_minutes = db.query(
-        func.coalesce(func.sum(Meeting.duration), 0)
+    summarized_duration_seconds = db.query(
+        func.coalesce(func.sum(Recording.duration), 0)
+    ).join(
+        Meeting, Recording.meeting_id == Meeting.id
     ).join(
         Summary, Summary.meeting_id == Meeting.id
     ).filter(
         Meeting.id.in_(meeting_ids_select)
     ).scalar() or 0
+    
+    summarized_duration_minutes = summarized_duration_seconds / 60
 
     # Dashboard shows only the latest 5 meetings to keep the card compact.
     recent_meetings = visible_meetings_query.order_by(

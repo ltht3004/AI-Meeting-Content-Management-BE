@@ -207,6 +207,32 @@ async def upload_recording(
             detail=f"File size must not exceed {MAX_RECORDING_SIZE_LABEL}.",
         )
 
+    # Extract audio duration
+    file_ext = os.path.splitext(file.filename or "")[1].lower() if file.filename else ".unknown"
+    duration_sec = 0
+    try:
+        import mutagen
+        import tempfile
+        import shutil
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
+            tmp_file.write(contents)
+            tmp_file.flush()
+            
+            try:
+                audio_info = mutagen.File(tmp_file.name)
+                if audio_info and audio_info.info and hasattr(audio_info.info, "length"):
+                    duration_sec = int(audio_info.info.length)
+            except Exception as meta_err:
+                print(f"Failed to read audio metadata: {meta_err}")
+                
+        try:
+            os.remove(tmp_file.name)
+        except OSError:
+            pass
+    except Exception as e:
+        print(f"Failed during audio metadata extraction: {e}")
+
     # Upload binary audio to Supabase Storage; the database stores metadata and URL only.
     content_type = file.content_type or "audio/mpeg"
 
@@ -228,6 +254,7 @@ async def upload_recording(
         file_url=file_url,
         file_type=content_type,
         size=len(contents),
+        duration=duration_sec,
     )
 
     db.add(recording)

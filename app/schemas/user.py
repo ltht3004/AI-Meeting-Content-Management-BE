@@ -44,6 +44,7 @@ class UserResponse(UserBase):
     avatar_url: Optional[str] = None
     total_quota: int
     used_quota: int
+    reset_date: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

@@ -43,6 +43,11 @@ class Recording(Base):
         nullable=False,
     )
 
+    duration = Column(
+        BigInteger,
+        nullable=True,
+    )
+
     created_at = Column(
         DateTime,
         server_default=func.now(),
