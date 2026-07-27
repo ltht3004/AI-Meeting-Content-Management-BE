@@ -2,6 +2,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Optional
 from uuid import UUID, uuid4
+import os
 import urllib.request
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
