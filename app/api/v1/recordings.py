@@ -510,7 +510,7 @@ def get_transcript_by_recording(
     }
     
 @router.delete("/{recording_id}")
-def delete_recording(
+async def delete_recording(
     recording_id: UUID,
     current_user_id: Optional[str] = Query(
         None,
@@ -553,6 +553,40 @@ def delete_recording(
 
     db.delete(recording)
     db.commit()
+
+    # Re-generate summary after deletion
+    try:
+        from app.services.ai_summary import summarize_transcript
+        from app.models.summary import Summary
+
+        all_recordings = db.query(Recording).filter(Recording.meeting_id == meeting.id).all()
+        recording_ids = [r.id for r in all_recordings]
+        
+        if not recording_ids:
+            # If no recordings left, delete the summary
+            db.query(Summary).filter(Summary.meeting_id == meeting.id).delete()
+            db.commit()
+        else:
+            all_transcripts = db.query(Transcript).filter(Transcript.recording_id.in_(recording_ids)).all()
+            combined_content = "\n\n".join([t.content for t in all_transcripts if t.content])
+            
+            if combined_content:
+                summary_text = await summarize_transcript(combined_content)
+                existing_summary = db.query(Summary).filter(Summary.meeting_id == meeting.id).first()
+                if existing_summary:
+                    existing_summary.content = summary_text
+                else:
+                    new_summary = Summary(
+                        meeting_id=meeting.id,
+                        content=summary_text
+                    )
+                    db.add(new_summary)
+                db.commit()
+            else:
+                db.query(Summary).filter(Summary.meeting_id == meeting.id).delete()
+                db.commit()
+    except Exception as e:
+        print(f"FAILED TO GENERATE SUMMARY ON DELETE: {str(e)}")
 
     return {
         "message": "Recording deleted successfully",
