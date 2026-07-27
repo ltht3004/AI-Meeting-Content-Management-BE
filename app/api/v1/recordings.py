@@ -64,7 +64,7 @@ def validate_recording_manager(
     db: Session,
     meeting: Meeting,
     current_user_id: Optional[str],
-) -> None:
+) -> User:
     # Recording management is stricter than viewing: only meeting creator or admin can change files.
     if not current_user_id:
         raise HTTPException(
@@ -100,6 +100,8 @@ def validate_recording_manager(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Permission denied: Only the creator or an admin can manage recordings",
         )
+        
+    return current_user
 
 
 @router.get(
@@ -162,11 +164,23 @@ async def upload_recording(
             detail="Meeting not found",
         )
 
-    validate_recording_manager(
+    current_user = validate_recording_manager(
         db=db,
         meeting=meeting,
         current_user_id=current_user_id,
     )
+
+    from sqlalchemy.sql import func
+    used_duration_seconds = db.query(
+        func.coalesce(func.sum(Recording.duration), 0)
+    ).join(Meeting, Recording.meeting_id == Meeting.id).filter(Meeting.user_id == current_user.id).scalar()
+    
+    used_quota_minutes = int(used_duration_seconds // 60)
+    if used_quota_minutes >= current_user.total_quota:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You have exceeded your total usage quota of {current_user.total_quota} minutes. Please upgrade your plan or contact support to upload more files.",
+        )
 
     # Validate file type before reading content.
     # Browser MIME types can be inconsistent, so extension is the stable check here.
