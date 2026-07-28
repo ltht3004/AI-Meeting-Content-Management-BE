@@ -67,9 +67,15 @@ def get_profile_stats(current_user: User = Depends(get_current_user), db: Sessio
     total_transcripts = db.query(Transcript).join(Recording).join(Meeting).filter(Meeting.user_id == current_user.id).count()
     total_summaries = db.query(Summary).join(Meeting).filter(Meeting.user_id == current_user.id).count()
 
+    from datetime import datetime, timezone
+    first_day_of_month = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
     used_duration_seconds = db.query(
         func.coalesce(func.sum(Recording.duration), 0)
-    ).join(Meeting, Recording.meeting_id == Meeting.id).filter(Meeting.user_id == current_user.id).scalar()
+    ).join(Meeting, Recording.meeting_id == Meeting.id).filter(
+        Meeting.user_id == current_user.id,
+        Recording.created_at >= first_day_of_month
+    ).scalar()
     
     used_duration_minutes = (used_duration_seconds or 0) / 60
 

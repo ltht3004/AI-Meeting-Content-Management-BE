@@ -117,9 +117,15 @@ def get_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
         
+    from datetime import datetime, timezone
+    first_day_of_month = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
     used_duration_seconds = db.query(
         func.coalesce(func.sum(Recording.duration), 0)
-    ).join(Meeting, Recording.meeting_id == Meeting.id).filter(Meeting.user_id == user_id).scalar()
+    ).join(Meeting, Recording.meeting_id == Meeting.id).filter(
+        Meeting.user_id == user_id,
+        Recording.created_at >= first_day_of_month
+    ).scalar()
     
     used_duration_minutes = (used_duration_seconds or 0) / 60
     user.used_quota = int(used_duration_minutes)
