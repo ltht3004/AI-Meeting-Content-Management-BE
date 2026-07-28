@@ -79,7 +79,15 @@ def get_profile_stats(current_user: User = Depends(get_current_user), db: Sessio
     
     used_duration_minutes = (used_duration_seconds or 0) / 60
 
-    reset_date_str = current_user.reset_date.strftime("%b %d, %Y") if current_user.reset_date else "N/A"
+    now = datetime.utcnow()
+    if now.month == 12:
+        next_month = 1
+        next_year = now.year + 1
+    else:
+        next_month = now.month + 1
+        next_year = now.year
+    next_reset = datetime(next_year, next_month, 1)
+    reset_date_str = next_reset.strftime("%b %d, %Y")
 
     return {
         "totalMeetings": total_meetings,
