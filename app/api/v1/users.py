@@ -129,7 +129,19 @@ def get_user(
     
     used_duration_minutes = (used_duration_seconds or 0) / 60
     user.used_quota = int(used_duration_minutes)
-    
+
+    if user.role != "admin":
+        now = datetime.utcnow()
+        if now.month == 12:
+            next_month = 1
+            next_year = now.year + 1
+        else:
+            next_month = now.month + 1
+            next_year = now.year
+        user.reset_date = datetime(next_year, next_month, 1)
+    else:
+        user.reset_date = None
+        
     return user
 
 @router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
