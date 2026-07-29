@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.meeting import Meeting
 from app.models.recording import Recording
+from app.models.summary import Summary
 from app.models.transcript import Transcript
 from app.models.user import User
 from app.schemas.recording import RecordingResponse
@@ -60,6 +61,52 @@ def build_recording_response(recording: Recording) -> dict:
     }
 
 
+def refresh_meeting_status_after_recording_change(
+    db: Session,
+    meeting: Meeting,
+) -> None:
+    recordings = (
+        db.query(Recording)
+        .filter(Recording.meeting_id == meeting.id)
+        .all()
+    )
+
+    if not recordings:
+        # No recordings means there is no current AI output source for the meeting.
+        meeting.status = "Scheduled"
+        existing_summary = (
+            db.query(Summary)
+            .filter(Summary.meeting_id == meeting.id)
+            .first()
+        )
+        if existing_summary:
+            db.delete(existing_summary)
+        return
+
+    recording_ids = [recording.id for recording in recordings]
+    transcript_count = (
+        db.query(Transcript)
+        .filter(Transcript.recording_id.in_(recording_ids))
+        .count()
+    )
+    has_complete_summary = (
+            db.query(Summary)
+            .filter(
+                Summary.meeting_id == meeting.id,
+                Summary.content.isnot(None),
+                Summary.content != "",
+            )
+            .first()
+            is not None
+    )
+
+    meeting.status = (
+        "Completed"
+        if transcript_count == len(recordings) and has_complete_summary
+        else "Processing"
+    )
+
+
 def validate_recording_manager(
     db: Session,
     meeting: Meeting,
@@ -102,39 +149,6 @@ def validate_recording_manager(
         )
         
     return current_user
-
-
-@router.get(
-    "/meeting/{meeting_id}",
-    response_model=list[RecordingResponse],
-)
-def get_recordings_by_meeting(
-    meeting_id: UUID,
-    db: Session = Depends(get_db),
-):
-    meeting = (
-        db.query(Meeting)
-        .filter(Meeting.id == meeting_id)
-        .first()
-    )
-
-    if not meeting:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Meeting not found",
-        )
-
-    recordings = (
-        db.query(Recording)
-        .filter(Recording.meeting_id == meeting_id)
-        .order_by(Recording.created_at.desc())
-        .all()
-    )
-
-    return [
-        build_recording_response(recording)
-        for recording in recordings
-    ]
 
 
 @router.post(
@@ -278,6 +292,9 @@ async def upload_recording(
         duration=duration_sec,
     )
 
+    # Once a recording exists, the meeting has entered the AI processing stage.
+    meeting.status = "Processing"
+
     db.add(recording)
     db.commit()
     db.refresh(recording)
@@ -335,10 +352,14 @@ async def upload_recording(
                         content=summary_text
                     )
                     db.add(new_summary)
+
+                # Transcript and summary are both available, so the meeting is complete.
+                meeting.status = "Completed"
                 
                 db.commit()
                 print("SUMMARY GENERATED AND SAVED")
         except Exception as e:
+            db.rollback()
             print(f"FAILED TO GENERATE SUMMARY: {str(e)}")
             # Do not rollback the transcript, just log the summary failure
 
@@ -384,7 +405,7 @@ async def retry_transcription(
     if current_user and current_user.role == "admin":
         is_admin = True
 
-    if not is_admin and meeting.creator_id != current_user_id:
+    if not is_admin and meeting.user_id != current_user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only meeting creator or admin can retry transcription."
@@ -397,6 +418,10 @@ async def retry_transcription(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Transcription already exists for this recording."
         )
+
+    # Retrying transcription means the meeting returns to the processing stage.
+    meeting.status = "Processing"
+    db.commit()
 
     try:
         # Download file from Supabase URL
@@ -461,10 +486,13 @@ async def retry_transcription(
                         content=summary_text
                     )
                     db.add(new_summary)
+
+                meeting.status = "Completed"
                 
                 db.commit()
                 print("SUMMARY GENERATED AND SAVED (RETRY)")
         except Exception as e:
+            db.rollback()
             print(f"FAILED TO GENERATE SUMMARY (RETRY): {str(e)}")
 
     except Exception as exc:
@@ -558,6 +586,8 @@ async def delete_recording(
     delete_file_from_storage(recording.file_url)
 
     db.delete(recording)
+    db.flush()
+    refresh_meeting_status_after_recording_change(db, meeting)
     db.commit()
 
     # Re-generate summary after deletion
