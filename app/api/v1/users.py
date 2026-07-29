@@ -72,7 +72,9 @@ def get_participants(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    query = db.query(User)
+    # Participant picker should only offer active accounts for new/edited meetings.
+    # Historical meetings still resolve inactive participants from their stored IDs.
+    query = db.query(User).filter(User.status == "Active")
 
     if search:
         search_term = f"%{search}%"

@@ -11,8 +11,11 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.meeting import Meeting
 from app.models.recording import Recording
+from app.models.summary import Summary
+from app.models.transcript import Transcript
 from app.models.user import User
 from app.schemas.meeting import MeetingCreate, MeetingUpdate
+from app.services.ai_summary import summarize_transcript
 from app.services.export_service import generate_docx_report, generate_pdf_report
 
 router = APIRouter()
@@ -74,6 +77,38 @@ def validate_meeting_access(db: Session, meeting: Meeting, current_user_id: Opti
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Permission denied: You are not a participant in this meeting"
         )
+
+
+def validate_meeting_manager(db: Session, meeting: Meeting, current_user_id: Optional[str]) -> User:
+    if not current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied: Only the creator or an admin can manage this meeting"
+        )
+
+    try:
+        user_uuid = UUID(str(current_user_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid current user ID") from exc
+
+    current_user = db.query(User).filter(User.id == user_uuid).first()
+
+    if not current_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if is_user_inactive(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account has been disabled"
+        )
+
+    if current_user.role != "admin" and meeting.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied: Only the creator or an admin can manage this meeting"
+        )
+
+    return current_user
 
 
 def format_bytes(size: int) -> str:
@@ -380,6 +415,72 @@ def export_meeting_report(
     )
 
 
+@router.post("/{meeting_id}/summary/retry")
+async def retry_meeting_summary(
+    meeting_id: UUID,
+    current_user_id: Optional[str] = Query(None, description="Current logged in user ID"),
+    db: Session = Depends(get_db)
+):
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    validate_meeting_manager(db, meeting, current_user_id)
+
+    recordings = db.query(Recording).filter(Recording.meeting_id == meeting_id).all()
+    if not recordings:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot generate summary because this meeting has no recordings."
+        )
+
+    recording_ids = [recording.id for recording in recordings]
+    transcripts = (
+        db.query(Transcript)
+        .filter(Transcript.recording_id.in_(recording_ids))
+        .all()
+    )
+    combined_content = "\n\n".join(
+        transcript.content
+        for transcript in transcripts
+        if transcript.content and transcript.content.strip()
+    )
+
+    if not combined_content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot generate summary because this meeting has no transcript content."
+        )
+
+    meeting.status = "Processing"
+    db.commit()
+
+    try:
+        summary_text = await summarize_transcript(combined_content)
+
+        existing_summary = db.query(Summary).filter(Summary.meeting_id == meeting_id).first()
+        if existing_summary:
+            existing_summary.content = summary_text
+        else:
+            db.add(Summary(meeting_id=meeting_id, content=summary_text))
+
+        meeting.status = "Completed"
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if meeting:
+            meeting.status = "Processing"
+            db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to generate AI summary: {str(exc)}"
+        ) from exc
+
+    return format_meeting_response(db, meeting)
+
+
 @router.get("/{meeting_id}")
 def get_meeting(
     meeting_id: UUID,
@@ -461,7 +562,8 @@ def create_meeting(
         duration=meeting.duration,
         # Store participant UUIDs, not names, so renamed users still resolve correctly later.
         participants=resolve_names_to_ids(db, meeting.participants),
-        status=meeting.status
+        # New meetings always begin as scheduled; AI processing updates this later.
+        status="Scheduled"
     )
 
     db.add(new_meeting)
