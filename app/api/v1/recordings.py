@@ -170,23 +170,26 @@ async def upload_recording(
         current_user_id=current_user_id,
     )
 
-    from sqlalchemy.sql import func
     from datetime import datetime, timezone
-    first_day_of_month = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-    used_duration_seconds = db.query(
-        func.coalesce(func.sum(Recording.duration), 0)
-    ).join(Meeting, Recording.meeting_id == Meeting.id).filter(
-        Meeting.user_id == current_user.id,
-        Recording.created_at >= first_day_of_month
-    ).scalar()
     
-    used_quota_minutes = int(used_duration_seconds // 60)
-    if used_quota_minutes >= current_user.total_quota:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"You have exceeded your total usage quota of {current_user.total_quota} minutes. Please upgrade your plan or contact support to upload more files.",
-        )
+    is_admin = current_user.role == "admin"
+    now = datetime.now(timezone.utc)
+    
+    # Check if quota needs resetting (new month)
+    if not is_admin:
+        if not current_user.reset_date or current_user.reset_date.month != now.month or current_user.reset_date.year != now.year:
+            current_user.used_quota = 0
+            current_user.reset_date = now
+            db.commit()
+            db.refresh(current_user)
+            
+        used_quota_minutes = current_user.used_quota
+        
+        if used_quota_minutes >= current_user.total_quota:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You have exceeded your total usage quota of {current_user.total_quota} minutes. Please upgrade your plan or contact support to upload more files.",
+            )
 
     # Validate file type before reading content.
     # Browser MIME types can be inconsistent, so extension is the stable check here.
@@ -253,6 +256,23 @@ async def upload_recording(
             pass
     except Exception as e:
         print(f"Failed during audio metadata extraction: {e}")
+
+    # Second quota check: verify if this specific file will push the user over the limit
+    if not is_admin:
+        file_mins = max(1, int(duration_sec // 60))
+        projected_quota_minutes = current_user.used_quota + file_mins
+        
+        if projected_quota_minutes > current_user.total_quota:
+            remaining = max(0, current_user.total_quota - current_user.used_quota)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Upload rejected: This file is ~{file_mins} minutes long, which exceeds your remaining quota of {remaining} minutes.",
+            )
+        
+        # Deduct quota (increment used) since we are proceeding
+        current_user.used_quota += file_mins
+        db.commit()
+        db.refresh(current_user)
 
     # Upload binary audio to Supabase Storage; the database stores metadata and URL only.
     content_type = file.content_type or "audio/mpeg"
@@ -384,7 +404,7 @@ async def retry_transcription(
     if current_user and current_user.role == "admin":
         is_admin = True
 
-    if not is_admin and meeting.creator_id != current_user_id:
+    if not is_admin and str(meeting.user_id) != str(current_user_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only meeting creator or admin can retry transcription."
@@ -469,6 +489,8 @@ async def retry_transcription(
 
     except Exception as exc:
         db.rollback()
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Transcription retry failed: {str(exc)}",

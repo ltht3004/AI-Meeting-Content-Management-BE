@@ -18,6 +18,7 @@ from app.schemas.profile import ProfileResponse, ProfileUpdate, ChangePassword, 
 from app.core.security import verify_password, get_password_hash
 from pydantic import BaseModel
 import random
+from datetime import datetime, timezone
 from datetime import datetime, timedelta
 from app.core.email import send_verification_email
 
@@ -67,17 +68,16 @@ def get_profile_stats(current_user: User = Depends(get_current_user), db: Sessio
     total_transcripts = db.query(Transcript).join(Recording).join(Meeting).filter(Meeting.user_id == current_user.id).count()
     total_summaries = db.query(Summary).join(Meeting).filter(Meeting.user_id == current_user.id).count()
 
-    from datetime import datetime, timezone
-    first_day_of_month = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-    used_duration_seconds = db.query(
-        func.coalesce(func.sum(Recording.duration), 0)
-    ).join(Meeting, Recording.meeting_id == Meeting.id).filter(
-        Meeting.user_id == current_user.id,
-        Recording.created_at >= first_day_of_month
-    ).scalar()
+    now = datetime.now(timezone.utc)
     
-    used_duration_minutes = (used_duration_seconds or 0) / 60
+    # Check if quota needs resetting (new month)
+    if not current_user.reset_date or current_user.reset_date.month != now.month or current_user.reset_date.year != now.year:
+        current_user.used_quota = 0
+        current_user.reset_date = now
+        db.commit()
+        db.refresh(current_user)
+
+    used_duration_minutes = current_user.used_quota
 
     now = datetime.utcnow()
     if now.month == 12:
