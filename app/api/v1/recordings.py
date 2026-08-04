@@ -388,6 +388,7 @@ async def upload_recording(
         # Roll back only the current failed transcript transaction.
         # The recording was committed previously, so it remains in the database.
         db.rollback()
+        print(f"TRANSCRIPTION FAILED: {str(exc)}")
 
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
